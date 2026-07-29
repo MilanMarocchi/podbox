@@ -1,21 +1,35 @@
-// CLI add: copies audio files onto a mounted iPod and updates its iTunesDB.
-// Same pipeline as the GUI drag-and-drop; used for headless testing.
+// CLI add: copies (or transcodes) audio files onto a mounted iPod and updates
+// its iTunesDB. Same pipeline as the GUI drag-and-drop; used for testing.
+//   podbox_add <mount> [--alac|--mp3] <file>...
 #include "itdb/itunesdb.h"
 #include "library/metadata.h"
+#include "library/transcode.h"
 #include "sync/sync_engine.h"
 
 #include <cstdio>
+#include <cstring>
 #include <random>
 
 namespace fs = std::filesystem;
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: podbox_add <mount-point> <file>...\n");
+        std::fprintf(stderr,
+                     "usage: podbox_add <mount-point> [--alac|--mp3] <file>...\n");
         return 2;
     }
     const fs::path mount = argv[1];
     const fs::path dbPath = mount / "iPod_Control" / "iTunes" / "iTunesDB";
+
+    podbox::ImportFormat fmt = podbox::ImportFormat::Original;
+    int firstFile = 2;
+    if (argc >= 3 && std::strcmp(argv[2], "--alac") == 0) {
+        fmt = podbox::ImportFormat::Alac;
+        firstFile = 3;
+    } else if (argc >= 3 && std::strcmp(argv[2], "--mp3") == 0) {
+        fmt = podbox::ImportFormat::Mp3;
+        firstFile = 3;
+    }
 
     auto res = podbox::parseItunesDb(dbPath);
     if (!res.library) {
@@ -36,7 +50,7 @@ int main(int argc, char** argv) {
     std::mt19937_64 rng{std::random_device{}()};
 
     int added = 0;
-    for (int i = 2; i < argc; ++i) {
+    for (int i = firstFile; i < argc; ++i) {
         const fs::path src = argv[i];
         podbox::FileMeta meta = podbox::readFileMetadata(src);
         if (!meta.ok) {
@@ -45,13 +59,18 @@ int main(int argc, char** argv) {
         }
         std::string location;
         const fs::path dest = podbox::allocateMusicPath(
-            mount, src.extension().string(), &location);
-        std::error_code ec;
-        if (dest.empty() || !fs::copy_file(src, dest, ec) || ec) {
-            std::fprintf(stderr, "skip: %s: copy failed\n",
-                         src.filename().string().c_str());
+            mount, podbox::importExtension(fmt, src), &location);
+        std::string err;
+        if (dest.empty() || !podbox::importAudio(fmt, src, dest, &err)) {
+            std::fprintf(stderr, "skip: %s\n",
+                         err.empty() ? src.filename().string().c_str()
+                                     : err.c_str());
             continue;
         }
+        std::error_code ec;
+        if (const std::uint32_t sz = std::uint32_t(fs::file_size(dest, ec));
+            !ec)
+            meta.track.sizeBytes = sz;
         meta.track.id = nextId++;
         meta.track.dbid = rng();
         meta.track.location = location;

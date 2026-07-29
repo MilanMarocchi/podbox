@@ -29,11 +29,15 @@ bool isSupportedAudioFile(const fs::path& path) {
     return false;
 }
 
+bool isImportableAudioFile(const fs::path& path) {
+    return isSupportedAudioFile(path) || lowerExt(path) == ".flac";
+}
+
 FileMeta readFileMetadata(const fs::path& path) {
     FileMeta out;
-    if (!isSupportedAudioFile(path)) {
+    if (!isImportableAudioFile(path)) {
         out.error = path.filename().string() +
-                    ": format not supported by iPod (MP3/AAC/ALAC/WAV/AIFF)";
+                    ": unsupported format (use MP3/AAC/ALAC/WAV/AIFF/FLAC)";
         return out;
     }
 

@@ -24,6 +24,12 @@ styled after iTunes 7–9.
 - **Play counts & ratings** written by the iPod are merged back into the
   library automatically on connect.
 - **Album artwork** embedded in your files is shown for the selected track.
+- **Play songs from the iPod on your Mac** — double-click a track (or use the
+  transport controls) to play it through your computer's speakers, with a
+  now-playing display, seek scrubber, volume, and auto-advance.
+- **Import in any format** — drop in MP3, AAC, ALAC, WAV, AIFF, or **FLAC**.
+  Choose to keep files as-is, or convert everything to Apple Lossless (ALAC)
+  or MP3 on import. FLAC is always converted so it plays on the iPod.
 - **Safe eject** — click the eject button next to the device to flush and
   unmount before you unplug.
 
@@ -77,14 +83,21 @@ behind platform guards, but the app is currently tested only on macOS.
    model, serial, firmware and capacity under the **device** entry.
 2. Click **Music** to see every song, or a **playlist** to see its contents.
    Sort by clicking a column header; filter with the search box.
-3. **Add music**: drag audio files or folders onto the window. Supported
-   formats are the ones the iPod itself plays: MP3, AAC/ALAC (`.m4a`/`.m4b`),
-   WAV and AIFF.
-4. **Remove music**: right-click a song → *Remove from iPod*.
-5. **Playlists**: click *+ New Playlist*, or right-click a song →
+3. **Add music**: drag audio files or folders onto the window. Accepted
+   formats are MP3, AAC/ALAC (`.m4a`/`.m4b`), WAV, AIFF and FLAC. Pick an
+   import format under the device view (*Keep original*, *ALAC*, or *MP3*);
+   FLAC is always converted so it plays on the iPod.
+4. **Play a song**: double-click it, or use the play/prev/next controls and
+   volume in the toolbar. Drag the scrubber to seek.
+5. **Remove music**: right-click a song → *Remove from iPod*.
+6. **Playlists**: click *+ New Playlist*, or right-click a song →
    *Add to Playlist*. Right-click a playlist to rename or delete it. Drag rows
    to reorder a playlist.
-6. **Eject** with the button on the device row before unplugging.
+7. **Eject** with the button on the device row before unplugging.
+
+MP3 conversion uses `ffmpeg` or `lame` if installed; without either, the "MP3"
+option falls back to AAC (which the iPod also plays). ALAC, AAC and FLAC
+decoding use `afconvert`, which ships with macOS.
 
 ## Safety
 
@@ -106,9 +119,10 @@ The build also produces small utilities used for testing:
 
 - `itdb_dump <iTunesDB> [<out> [+pl]]` — print a database summary; with an
   output path, round-trip it through the writer and verify nothing changed.
-- `podbox_add <mount-point> <file>...` — add files to a mounted iPod from the
-  shell (same pipeline as the GUI).
+- `podbox_add <mount-point> [--alac|--mp3] <file>...` — add files to a mounted
+  iPod from the shell (same pipeline as the GUI).
 - `playcounts_test <iTunesDB> <Play Counts>` — verify the play-count merge.
+- `audio_test <audiofile> [seconds]` — play a file through the audio backend.
 
 ## How it works
 
@@ -124,9 +138,8 @@ device records live in a separate `Play Counts` file that is merged on connect.
 - `hash58` checksum so iPod classic and nano 3G–5G can be written
 - Album artwork **on** the device (`ArtworkDB` + `.ithmb` thumbnails)
 - Podcasts and audiobooks as first-class media types
-- Optional transcoding (e.g. FLAC → ALAC) on import
 - iPod shuffle (`iTunesSD`) support
-- Linux build
+- Linux build (audio backend + device layer)
 
 ## License
 

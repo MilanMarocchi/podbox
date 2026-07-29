@@ -51,9 +51,14 @@ int main() {
     });
 
     while (!glfwWindowShouldClose(window)) {
-        // Block on input but wake periodically so the device watcher can
-        // rescan for iPods being plugged in or removed.
-        glfwWaitEventsTimeout(0.25);
+        // Render continuously (capped by vsync) while focused so the UI feels
+        // responsive; idle on events when in the background to save power.
+        // Either way we wake at least a few times a second so the device
+        // watcher can notice an iPod being plugged in or removed.
+        if (glfwGetWindowAttrib(window, GLFW_FOCUSED))
+            glfwPollEvents();
+        else
+            glfwWaitEventsTimeout(0.2);
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();

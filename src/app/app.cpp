@@ -4,10 +4,12 @@
 #include "itdb/playcounts.h"
 #include "library/artwork.h"
 #include "library/metadata.h"
+#include "library/transcode.h"
 #include "ui/theme.h"
 
 #include <imgui.h>
 
+#define GL_SILENCE_DEPRECATION
 #if defined(__APPLE__)
 #include <OpenGL/gl3.h>
 #else
@@ -100,6 +102,7 @@ void App::frame() {
     updateLibrary();
     applyCompletedAdds();
     updateArtwork();
+    updatePlayback();
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
@@ -129,6 +132,8 @@ void App::frame() {
         ejectRequested_ = false;
         std::string err;
         const fs::path mount = loadedMount_;
+        if (player_) player_->stop();
+        playingTrackId_ = 0;
         if (ejectDevice(mount, &err)) {
             // Drop the library now; the watcher will confirm the unmount.
             library_.reset();
@@ -164,19 +169,19 @@ void App::onFilesDropped(const std::vector<std::string>& paths) {
             for (const auto& e :
                  fs::recursive_directory_iterator(path, ec)) {
                 if (e.is_regular_file(ec) &&
-                    isSupportedAudioFile(e.path()))
+                    isImportableAudioFile(e.path()))
                     files.push_back(e.path());
             }
-        } else if (isSupportedAudioFile(path)) {
+        } else if (isImportableAudioFile(path)) {
             files.push_back(path);
         }
     }
     std::sort(files.begin(), files.end());
     if (files.empty()) {
-        setStatus("No supported audio files (MP3/AAC/ALAC/WAV/AIFF)");
+        setStatus("No supported audio files (MP3/AAC/ALAC/WAV/AIFF/FLAC)");
         return;
     }
-    sync_.queueAdds(files, loadedMount_);
+    sync_.queueAdds(files, loadedMount_, importFormat_);
 }
 
 void App::applyCompletedAdds() {
@@ -370,6 +375,9 @@ void App::trackContextMenu(const Track& t) {
     selectedTrackId_ = t.id;
     ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::rgb(30, 30, 30)));
 
+    if (ImGui::MenuItem("Play")) playTrackId(t.id);
+    ImGui::Separator();
+
     if (ImGui::BeginMenu("Add to Playlist")) {
         if (ImGui::MenuItem("New Playlist…")) createPlaylist(t.id);
         if (library_ && !library_->playlists.empty()) ImGui::Separator();
@@ -453,10 +461,61 @@ void App::drawArtworkPane(float sidebarHeight) {
     dl->AddRect(p, ImVec2(p.x + box, p.y + box), pal::rgb(168, 174, 182), 2.0f);
 }
 
+bool App::animating() const {
+    return player_ && player_->state() == PlaybackState::Playing;
+}
+
+void App::updatePlayback() {
+    if (!player_ || playingTrackId_ == 0) return;
+    // Auto-advance to the next visible track when one finishes.
+    if (player_->reachedEnd()) playRelative(+1);
+}
+
+void App::playTrackId(std::uint32_t trackId) {
+    if (!library_) return;
+    const auto it = trackIndexById_.find(trackId);
+    if (it == trackIndexById_.end()) return;
+    const fs::path file =
+        locationToPath(loadedMount_, library_->tracks[it->second].location);
+    if (player_->open(file)) {
+        playingTrackId_ = trackId;
+        selectedTrackId_ = trackId;
+    } else {
+        setStatus("Could not play “" + library_->tracks[it->second].title +
+                  "”");
+    }
+}
+
+void App::playRelative(int delta) {
+    if (!library_ || visible_.empty()) {
+        if (player_) player_->stop();
+        playingTrackId_ = 0;
+        return;
+    }
+    // Find the currently playing row within the visible list, then step.
+    int cur = -1;
+    for (int i = 0; i < int(visible_.size()); ++i) {
+        if (library_->tracks[visible_[i].second].id == playingTrackId_) {
+            cur = i;
+            break;
+        }
+    }
+    const int next = cur + delta;
+    if (next < 0 || next >= int(visible_.size())) {
+        // Off either end: stop playback.
+        player_->stop();
+        playingTrackId_ = 0;
+        return;
+    }
+    playTrackId(library_->tracks[visible_[next].second].id);
+}
+
 void App::updateLibrary() {
     const auto& dev = watcher_.device();
     if (!dev) {
         if (library_ || !loadedMount_.empty()) {
+            if (player_) player_->stop();
+            playingTrackId_ = 0;
             library_.reset();
             libraryError_.clear();
             loadedMount_.clear();
@@ -584,6 +643,145 @@ void App::rebuildVisible() {
     if (!sortAsc_) std::reverse(visible_.begin(), visible_.end());
 }
 
+void App::drawTransport(float toolbarWidth) {
+    (void)toolbarWidth;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float cy = kToolbarHeight * 0.5f;
+    const PlaybackState st = player_ ? player_->state() : PlaybackState::Stopped;
+    const bool haveList = library_ && !visible_.empty();
+    const ImU32 glyph = haveList ? pal::rgb(70, 76, 84) : pal::rgb(178, 184, 190);
+    float x = 16.0f;
+    bool clicked = false;
+
+    auto button = [&](const char* id, float w) -> ImVec2 {
+        ImGui::SetCursorPos(ImVec2(x, cy - 13.0f));
+        ImGui::InvisibleButton(id, ImVec2(w, 26.0f));
+        clicked = ImGui::IsItemClicked();
+        const ImVec2 mn = ImGui::GetItemRectMin();
+        const ImVec2 mx = ImGui::GetItemRectMax();
+        x += w + 4.0f;
+        return ImVec2((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
+    };
+
+    // Previous.
+    {
+        const ImVec2 c = button("##prev", 26.0f);
+        dl->AddTriangleFilled(ImVec2(c.x + 3, c.y - 5), ImVec2(c.x + 3, c.y + 5),
+                              ImVec2(c.x - 3, c.y), glyph);
+        dl->AddRectFilled(ImVec2(c.x - 6, c.y - 5), ImVec2(c.x - 4, c.y + 5),
+                          glyph);
+        if (clicked && haveList) playRelative(-1);
+    }
+    // Play / pause.
+    {
+        const ImVec2 c = button("##playpause", 30.0f);
+        if (st == PlaybackState::Playing) {
+            dl->AddRectFilled(ImVec2(c.x - 5, c.y - 6), ImVec2(c.x - 1, c.y + 6),
+                              glyph);
+            dl->AddRectFilled(ImVec2(c.x + 1, c.y - 6), ImVec2(c.x + 5, c.y + 6),
+                              glyph);
+        } else {
+            dl->AddTriangleFilled(ImVec2(c.x - 5, c.y - 7),
+                                  ImVec2(c.x - 5, c.y + 7),
+                                  ImVec2(c.x + 6, c.y), glyph);
+        }
+        if (clicked) {
+            if (st == PlaybackState::Playing)
+                player_->pause();
+            else if (st == PlaybackState::Paused)
+                player_->play();
+            else if (playingTrackId_)
+                playTrackId(playingTrackId_);
+            else if (selectedTrackId_)
+                playTrackId(selectedTrackId_);
+            else if (haveList)
+                playTrackId(library_->tracks[visible_[0].second].id);
+        }
+    }
+    // Next.
+    {
+        const ImVec2 c = button("##next", 26.0f);
+        dl->AddTriangleFilled(ImVec2(c.x - 3, c.y - 5), ImVec2(c.x - 3, c.y + 5),
+                              ImVec2(c.x + 3, c.y), glyph);
+        dl->AddRectFilled(ImVec2(c.x + 4, c.y - 5), ImVec2(c.x + 6, c.y + 5),
+                          glyph);
+        if (clicked && haveList) playRelative(+1);
+    }
+
+    // Volume slider with a small speaker glyph.
+    x += 10.0f;
+    ImGui::SetCursorPos(ImVec2(x, cy - 8.0f));
+    ImGui::InvisibleButton("##volume", ImVec2(88.0f, 16.0f));
+    const ImVec2 vmn = ImGui::GetItemRectMin();
+    const ImVec2 vmx = ImGui::GetItemRectMax();
+    const float ty = (vmn.y + vmx.y) * 0.5f;
+    const float tx0 = vmn.x + 16.0f, tx1 = vmx.x;
+    // Speaker.
+    dl->AddRectFilled(ImVec2(vmn.x, ty - 3), ImVec2(vmn.x + 4, ty + 3),
+                      pal::rgb(120, 126, 134));
+    dl->AddTriangleFilled(ImVec2(vmn.x + 4, ty - 5), ImVec2(vmn.x + 4, ty + 5),
+                          ImVec2(vmn.x + 9, ty), pal::rgb(120, 126, 134));
+    float vol = player_ ? player_->volume() : 0.0f;
+    if (ImGui::IsItemActive()) {
+        vol = std::clamp((ImGui::GetIO().MousePos.x - tx0) / (tx1 - tx0), 0.0f,
+                         1.0f);
+        if (player_) player_->setVolume(vol);
+    }
+    dl->AddLine(ImVec2(tx0, ty), ImVec2(tx1, ty), pal::rgb(176, 182, 190), 2.0f);
+    dl->AddLine(ImVec2(tx0, ty), ImVec2(tx0 + (tx1 - tx0) * vol, ty),
+                pal::rgb(120, 140, 175), 2.0f);
+    dl->AddCircleFilled(ImVec2(tx0 + (tx1 - tx0) * vol, ty), 5.0f,
+                        pal::rgb(88, 94, 102));
+}
+
+void App::drawNowPlaying(ImVec2 a, ImVec2 b) {
+    if (!library_) return;
+    const auto it = trackIndexById_.find(playingTrackId_);
+    if (it == trackIndexById_.end()) return;
+    const Track& t = library_->tracks[it->second];
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float cx = (a.x + b.x) * 0.5f;
+
+    addTextCentered(dl, fonts_.ui, fonts_.uiSize, ImVec2(cx, a.y + 11.0f),
+                    pal::LcdText, t.title.c_str());
+    std::string sub = t.artist;
+    if (!t.album.empty()) sub += sub.empty() ? t.album : "  —  " + t.album;
+    addTextCentered(dl, fonts_.label, fonts_.labelSize,
+                    ImVec2(cx, a.y + 24.0f), pal::LcdTextDim, sub.c_str());
+
+    const double pos = player_->position();
+    const double dur = player_->duration();
+    const float y = b.y - 9.0f;
+    const float x0 = a.x + 46.0f, x1 = b.x - 46.0f;
+    const float frac =
+        dur > 0 ? float(std::clamp(pos / dur, 0.0, 1.0)) : 0.0f;
+    dl->AddLine(ImVec2(x0, y), ImVec2(x1, y), pal::rgb(185, 192, 200), 2.0f);
+    dl->AddLine(ImVec2(x0, y), ImVec2(x0 + (x1 - x0) * frac, y),
+                pal::rgb(84, 132, 214), 2.0f);
+    dl->AddCircleFilled(ImVec2(x0 + (x1 - x0) * frac, y), 4.5f,
+                        pal::rgb(70, 110, 180));
+
+    dl->AddText(fonts_.label, fonts_.labelSize, ImVec2(a.x + 8.0f, y - 6.0f),
+                pal::LcdTextDim,
+                formatDuration(std::uint32_t(pos * 1000)).c_str());
+    const std::string rem =
+        "-" + formatDuration(std::uint32_t(std::max(0.0, dur - pos) * 1000));
+    const float rw = fonts_.label->CalcTextSizeA(fonts_.labelSize, FLT_MAX, 0,
+                                                 rem.c_str())
+                         .x;
+    dl->AddText(fonts_.label, fonts_.labelSize,
+                ImVec2(b.x - 8.0f - rw, y - 6.0f), pal::LcdTextDim, rem.c_str());
+
+    // Draggable scrub region over the progress line.
+    ImGui::SetCursorScreenPos(ImVec2(x0, y - 8.0f));
+    ImGui::InvisibleButton("##scrub", ImVec2(std::max(1.0f, x1 - x0), 16.0f));
+    if (ImGui::IsItemActive() && dur > 0) {
+        const float tt = std::clamp(
+            (ImGui::GetIO().MousePos.x - x0) / (x1 - x0), 0.0f, 1.0f);
+        player_->seek(tt * dur);
+    }
+}
+
 void App::drawToolbar() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p = ImGui::GetWindowPos();
@@ -594,6 +792,8 @@ void App::drawToolbar() {
     dl->AddLine(ImVec2(p.x, br.y - 0.5f), ImVec2(br.x, br.y - 0.5f),
                 pal::ToolbarBorder);
 
+    drawTransport(w);
+
     // Centered "LCD" status display, like the old iTunes readout.
     const float lcdW = std::min(kLcdWidth, w - 40.0f);
     if (lcdW > 80.0f) {
@@ -603,39 +803,45 @@ void App::drawToolbar() {
         dl->AddRectFilled(a, b, pal::LcdBg, 5.0f);
         dl->AddRect(a, b, pal::LcdBorder, 5.0f);
 
-        const auto& dev = watcher_.device();
-        std::string line1 = dev ? dev->volumeName : "PodBox";
-        std::string line2;
         const bool syncing = sync_.busy();
-        if (syncing) {
-            line1 = "Copying “" + sync_.currentName() + "”";
-            line2 = std::to_string(std::min(sync_.batchDone() + 1,
-                                            sync_.batchTotal())) +
-                    " of " + std::to_string(sync_.batchTotal());
-        } else if (dev && library_) {
-            line2 = std::to_string(library_->tracks.size()) + " songs — " +
-                    formatBytes(dev->freeBytes) + " available";
-        } else if (dev) {
-            line2 = formatBytes(dev->freeBytes) + " available";
+        if (!syncing && playingTrackId_ != 0) {
+            drawNowPlaying(a, b);
         } else {
-            line2 = "No iPod connected";
-        }
-        const float cx = (a.x + b.x) * 0.5f;
-        addTextCentered(dl, fonts_.ui, fonts_.uiSize, ImVec2(cx, a.y + 12.0f),
-                        pal::LcdText, line1.c_str());
-        addTextCentered(dl, fonts_.label, fonts_.labelSize,
-                        ImVec2(cx, a.y + 25.0f), pal::LcdTextDim,
-                        line2.c_str());
-        if (syncing && sync_.batchTotal() > 0) {
-            // Thin progress bar along the bottom of the LCD, iTunes-style.
-            const float frac =
-                float(sync_.batchDone()) / float(sync_.batchTotal());
-            const ImVec2 p0(a.x + 8, b.y - 7);
-            const ImVec2 p1(b.x - 8, b.y - 3);
-            dl->AddRectFilled(p0, p1, pal::rgb(196, 205, 212), 2.0f);
-            dl->AddRectFilled(
-                p0, ImVec2(p0.x + std::max(4.0f, (p1.x - p0.x) * frac), p1.y),
-                pal::CapacityFill, 2.0f);
+            const auto& dev = watcher_.device();
+            std::string line1 = dev ? dev->volumeName : "PodBox";
+            std::string line2;
+            if (syncing) {
+                line1 = "Copying “" + sync_.currentName() + "”";
+                line2 = std::to_string(std::min(sync_.batchDone() + 1,
+                                                sync_.batchTotal())) +
+                        " of " + std::to_string(sync_.batchTotal());
+            } else if (dev && library_) {
+                line2 = std::to_string(library_->tracks.size()) + " songs — " +
+                        formatBytes(dev->freeBytes) + " available";
+            } else if (dev) {
+                line2 = formatBytes(dev->freeBytes) + " available";
+            } else {
+                line2 = "No iPod connected";
+            }
+            const float cx = (a.x + b.x) * 0.5f;
+            addTextCentered(dl, fonts_.ui, fonts_.uiSize,
+                            ImVec2(cx, a.y + 12.0f), pal::LcdText,
+                            line1.c_str());
+            addTextCentered(dl, fonts_.label, fonts_.labelSize,
+                            ImVec2(cx, a.y + 25.0f), pal::LcdTextDim,
+                            line2.c_str());
+            if (syncing && sync_.batchTotal() > 0) {
+                // Thin progress bar along the bottom of the LCD.
+                const float frac =
+                    float(sync_.batchDone()) / float(sync_.batchTotal());
+                const ImVec2 p0(a.x + 8, b.y - 7);
+                const ImVec2 p1(b.x - 8, b.y - 3);
+                dl->AddRectFilled(p0, p1, pal::rgb(196, 205, 212), 2.0f);
+                dl->AddRectFilled(
+                    p0,
+                    ImVec2(p0.x + std::max(4.0f, (p1.x - p0.x) * frac), p1.y),
+                    pal::CapacityFill, 2.0f);
+            }
         }
     }
 
@@ -688,7 +894,8 @@ void App::drawSidebar(float height) {
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, v4(pal::Selection));
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, v4(pal::Selection));
         const bool clicked = ImGui::Selectable(
-            (std::string("##") + id).c_str(), selected, 0, ImVec2(0, 18));
+            (std::string("##") + id).c_str(), selected,
+            ImGuiSelectableFlags_AllowOverlap, ImVec2(0, 18));
         ImGui::PopStyleColor(3);
         dl->AddText(fonts_.ui, fonts_.uiSize, ImVec2(pos.x + indent, pos.y + 2),
                     selected ? IM_COL32_WHITE : pal::rgb(30, 30, 30),
@@ -702,17 +909,24 @@ void App::drawSidebar(float height) {
         const ImVec2 iconPos = ImGui::GetCursorScreenPos();
         if (row("device", dev->volumeName, 28.0f, view_ == View::Device))
             view_ = View::Device;
-        // Eject button, right-aligned on the device row.
+        const ImVec2 afterRow = ImGui::GetCursorScreenPos();
+        // Eject button overlapping the right side of the device row.
         const bool devSelected = view_ == View::Device;
-        const ImVec2 ejp(iconPos.x + kSidebarWidth - 26.0f, iconPos.y + 3.0f);
-        const ImU32 ejCol = devSelected ? IM_COL32_WHITE : pal::rgb(90, 98, 108);
-        dl->AddTriangleFilled(ImVec2(ejp.x, ejp.y + 6), ImVec2(ejp.x + 10, ejp.y + 6),
-                              ImVec2(ejp.x + 5, ejp.y), ejCol);
-        dl->AddRectFilled(ImVec2(ejp.x, ejp.y + 8), ImVec2(ejp.x + 10, ejp.y + 11),
-                          ejCol);
-        if (ImGui::IsMouseHoveringRect(ejp, ImVec2(ejp.x + 12, ejp.y + 12)) &&
-            ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        ImGui::SetCursorScreenPos(
+            ImVec2(iconPos.x + kSidebarWidth - 32.0f, iconPos.y));
+        if (ImGui::InvisibleButton("##eject", ImVec2(26.0f, 18.0f)))
             ejectRequested_ = true;
+        const ImVec2 em = ImGui::GetItemRectMin();
+        const float ejx = em.x + 8.0f, ejy = em.y + 4.0f;
+        const ImU32 ejCol = ImGui::IsItemHovered()
+                                ? pal::rgb(40, 90, 200)
+                                : (devSelected ? IM_COL32_WHITE
+                                               : pal::rgb(90, 98, 108));
+        dl->AddTriangleFilled(ImVec2(ejx, ejy + 6), ImVec2(ejx + 10, ejy + 6),
+                              ImVec2(ejx + 5, ejy), ejCol);
+        dl->AddRectFilled(ImVec2(ejx, ejy + 8), ImVec2(ejx + 10, ejy + 11),
+                          ejCol);
+        ImGui::SetCursorScreenPos(afterRow);
         drawIpodIcon(dl, ImVec2(iconPos.x + 10, iconPos.y + 1));
         if (library_) {
             if (row("music", "Music", 28.0f, view_ == View::Music)) {
@@ -860,6 +1074,28 @@ void App::drawDeviceView(const IpodInfo& dev) {
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(0, 2));
     drawCapacityBar(dev);
+
+    ImGui::Dummy(ImVec2(0, 14));
+    ImGui::PushFont(fonts_.uiBold);
+    ImGui::TextUnformatted("Import format");
+    ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0, 2));
+    int fmt = int(importFormat_);
+    ImGui::RadioButton("Keep original format", &fmt,
+                       int(ImportFormat::Original));
+    ImGui::RadioButton("Convert everything to Apple Lossless (ALAC)", &fmt,
+                       int(ImportFormat::Alac));
+    ImGui::RadioButton(mp3EncoderAvailable()
+                           ? "Convert everything to MP3 (320 kbps)"
+                           : "Convert everything to AAC (256 kbps)",
+                       &fmt, int(ImportFormat::Mp3));
+    importFormat_ = ImportFormat(fmt);
+
+    ImGui::PushFont(fonts_.label);
+    ImGui::TextColored(v4(pal::TextDim),
+                       "Drag songs onto the window to add them. FLAC is always "
+                       "converted so it plays on the iPod.");
+    ImGui::PopFont();
 }
 
 void App::drawTrackTable() {
@@ -929,8 +1165,13 @@ void App::drawTrackTable() {
             char lbl[32];
             std::snprintf(lbl, sizeof(lbl), "%d##%u", r + 1, t.id);
             if (ImGui::Selectable(lbl, selected,
-                                  ImGuiSelectableFlags_SpanAllColumns))
+                                  ImGuiSelectableFlags_SpanAllColumns |
+                                      ImGuiSelectableFlags_AllowDoubleClick |
+                                      ImGuiSelectableFlags_AllowOverlap))
                 selectedTrackId_ = t.id;
+            if (ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                playTrackId(t.id);
 
             // Drag to reorder, only within a playlist in manual order.
             if (reorderable) {

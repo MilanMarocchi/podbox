@@ -1,10 +1,12 @@
 #pragma once
 
+#include "audio/player.h"
 #include "device/device_watcher.h"
 #include "itdb/itunesdb.h"
 #include "sync/sync_engine.h"
 #include "ui/theme.h"
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -15,13 +17,18 @@ namespace podbox {
 
 class App {
 public:
-    explicit App(const Fonts& fonts) : fonts_(fonts) {}
+    explicit App(const Fonts& fonts)
+        : fonts_(fonts), player_(AudioPlayer::create()) {}
 
     // Draws one frame of the UI. Call between ImGui NewFrame/Render.
     void frame();
 
     // Files/folders dropped onto the window (from the GLFW drop callback).
     void onFilesDropped(const std::vector<std::string>& paths);
+
+    // True when the UI should redraw continuously (e.g. playback in progress),
+    // so the main loop can pick a shorter event-wait timeout.
+    bool animating() const;
 
 private:
     enum class View { Device, Music, Playlist };
@@ -39,6 +46,11 @@ private:
     void trackContextMenu(const Track& t);
     void updateArtwork();
     void drawArtworkPane(float sidebarHeight);
+    void updatePlayback();
+    void playTrackId(std::uint32_t trackId);
+    void playRelative(int delta);
+    void drawTransport(float toolbarWidth);
+    void drawNowPlaying(ImVec2 lcdMin, ImVec2 lcdMax);
     void drawToolbar();
     void drawSidebar(float height);
     void drawMainPanel(float height);
@@ -66,6 +78,7 @@ private:
     std::uint32_t selectedTrackId_ = 0;
 
     SyncEngine sync_;
+    ImportFormat importFormat_ = ImportFormat::Original;
     bool pendingDbWrite_ = false;
     int lastBatchAdded_ = 0;
     std::uint32_t nextTrackId_ = 100;
@@ -85,6 +98,11 @@ private:
     std::uint32_t artTrackId_ = 0;
     bool artHasImage_ = false;
     bool ejectRequested_ = false;
+
+    // Playback.
+    std::unique_ptr<AudioPlayer> player_;
+    std::uint32_t playingTrackId_ = 0;
+    bool scrubbing_ = false;
 };
 
 }  // namespace podbox

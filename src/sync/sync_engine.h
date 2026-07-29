@@ -1,6 +1,7 @@
 #pragma once
 
 #include "itdb/itunesdb.h"
+#include "library/transcode.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -33,8 +34,9 @@ public:
         std::string error;
     };
 
+    // Copies (or transcodes, per `fmt`) each file onto the device.
     void queueAdds(const std::vector<std::filesystem::path>& files,
-                   const std::filesystem::path& mount);
+                   const std::filesystem::path& mount, ImportFormat fmt);
     std::vector<Completed> takeCompleted();
 
     bool busy() const;
@@ -50,6 +52,7 @@ private:
     std::deque<std::filesystem::path> pending_;
     std::vector<Completed> completed_;
     std::filesystem::path mount_;
+    ImportFormat importFmt_ = ImportFormat::Original;
     std::string current_;
     std::atomic<int> total_{0};
     std::atomic<int> done_{0};

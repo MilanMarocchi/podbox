@@ -70,17 +70,32 @@ add_library(podbox_core STATIC
   src/itdb/playcounts.cpp
   src/library/artwork.cpp
   src/library/metadata.cpp
+  src/library/transcode.cpp
   src/sync/sync_engine.cpp)
 target_include_directories(podbox_core PUBLIC src)
 target_include_directories(podbox_core PRIVATE ${TAGLIB_INCLUDES}
   ${stb_SOURCE_DIR})
 target_link_libraries(podbox_core PUBLIC tag)
 
+if(APPLE)
+  set(PODBOX_AUDIO_SRC src/audio/player_avf.mm)
+  set_source_files_properties(src/audio/player_avf.mm PROPERTIES
+    COMPILE_FLAGS "-fobjc-arc")
+else()
+  set(PODBOX_AUDIO_SRC src/audio/player_null.cpp)
+endif()
+
 add_executable(podbox
   src/main.cpp
   src/app/app.cpp
-  src/ui/theme.cpp)
+  src/ui/theme.cpp
+  ${PODBOX_AUDIO_SRC})
 target_link_libraries(podbox PRIVATE podbox_core imgui_lib)
+
+if(APPLE)
+  target_link_libraries(podbox PRIVATE
+    "-framework AVFoundation" "-framework Foundation")
+endif()
 
 add_executable(itdb_dump tools/itdb_dump.cpp)
 target_link_libraries(itdb_dump PRIVATE podbox_core)
@@ -90,6 +105,13 @@ target_link_libraries(podbox_add PRIVATE podbox_core)
 
 add_executable(playcounts_test tools/playcounts_test.cpp)
 target_link_libraries(playcounts_test PRIVATE podbox_core)
+
+if(APPLE)
+  add_executable(audio_test tools/audio_test.cpp ${PODBOX_AUDIO_SRC})
+  target_include_directories(audio_test PRIVATE src)
+  target_link_libraries(audio_test PRIVATE
+    "-framework AVFoundation" "-framework Foundation")
+endif()
 
 if(APPLE)
   target_link_libraries(podbox PRIVATE "-framework OpenGL")

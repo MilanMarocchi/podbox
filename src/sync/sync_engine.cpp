@@ -1,6 +1,7 @@
 #include "sync/sync_engine.h"
 
 #include "library/metadata.h"
+#include "library/transcode.h"
 
 #include <random>
 
@@ -57,11 +58,12 @@ SyncEngine::~SyncEngine() {
 }
 
 void SyncEngine::queueAdds(const std::vector<fs::path>& files,
-                           const fs::path& mount) {
+                           const fs::path& mount, ImportFormat fmt) {
     if (files.empty()) return;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         mount_ = mount;
+        importFmt_ = fmt;
         for (const auto& f : files) pending_.push_back(f);
         if (!working_.load() && pending_.size() == files.size()) {
             // Fresh batch: reset progress counters.
@@ -96,6 +98,7 @@ std::string SyncEngine::currentName() const {
 void SyncEngine::run() {
     for (;;) {
         fs::path src, mount;
+        ImportFormat fmt = ImportFormat::Original;
         {
             std::unique_lock<std::mutex> lock(mutex_);
             cv_.wait(lock, [&] { return stop_ || !pending_.empty(); });
@@ -103,6 +106,7 @@ void SyncEngine::run() {
             src = pending_.front();
             pending_.pop_front();
             mount = mount_;
+            fmt = importFmt_;
             current_ = src.filename().string();
             working_.store(true);
         }
@@ -113,18 +117,24 @@ void SyncEngine::run() {
         if (!meta.ok) {
             result.error = meta.error;
         } else {
+            const std::string ext = importExtension(fmt, src);
             std::string location;
-            const fs::path dest =
-                allocateMusicPath(mount, src.extension().string(), &location);
+            const fs::path dest = allocateMusicPath(mount, ext, &location);
             std::error_code ec;
+            std::string convErr;
             if (dest.empty()) {
                 result.error = result.name + ": could not allocate a filename";
-            } else if (!fs::copy_file(src, dest, ec) || ec) {
-                result.error = result.name + ": copy failed (" + ec.message() +
-                               ")";
+            } else if (!importAudio(fmt, src, dest, &convErr)) {
+                result.error = convErr;
+                fs::remove(dest, ec);  // clean up any partial output
             } else {
                 result.track = std::move(meta.track);
                 result.track.location = location;
+                // The on-device file's size differs after transcoding; record
+                // the actual size so the DB and capacity math stay correct.
+                const std::uint32_t sz =
+                    std::uint32_t(fs::file_size(dest, ec));
+                if (!ec) result.track.sizeBytes = sz;
             }
         }
 

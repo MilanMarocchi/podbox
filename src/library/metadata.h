@@ -7,8 +7,12 @@
 
 namespace podbox {
 
-// True for audio formats a classic iPod can play (by extension).
+// True for audio formats a classic iPod can play directly (by extension).
 bool isSupportedAudioFile(const std::filesystem::path& path);
+
+// True for anything PodBox can import: iPod-playable formats plus those it can
+// transcode to a playable one (FLAC).
+bool isImportableAudioFile(const std::filesystem::path& path);
 
 struct FileMeta {
     bool ok = false;
