@@ -90,6 +90,7 @@ void parseTracks(const Buf& b, size_t mhlt, Library& lib) {
         if (ihLen < 0x60 || itLen < ihLen) break;
 
         Track t;
+        if (b.has(pos, ihLen)) t.rawHeader.assign(&b.d[pos], &b.d[pos] + ihLen);
         t.id = b.u32(pos + 16);
         t.rating = b.u8(pos + 31);
         t.sizeBytes = b.u32(pos + 36);
@@ -117,7 +118,14 @@ void parseTracks(const Buf& b, size_t mhlt, Library& lib) {
                 case 4: t.artist = readMhodString(b, mpos, mtLen); break;
                 case 5: t.genre = readMhodString(b, mpos, mtLen); break;
                 case 12: t.composer = readMhodString(b, mpos, mtLen); break;
-                default: break;
+                default:
+                    // Not understood, so kept byte-for-byte rather than lost.
+                    if (b.has(mpos, mtLen)) {
+                        t.extraMhods.insert(t.extraMhods.end(), &b.d[mpos],
+                                            &b.d[mpos] + mtLen);
+                        ++t.extraMhodCount;
+                    }
+                    break;
             }
             mpos += mtLen;
         }
@@ -145,7 +153,15 @@ void parsePlaylists(const Buf& b, size_t mhlp, Library& lib) {
         for (std::uint32_t m = 0; m < nMhods && b.tagIs(p, "mhod"); ++m) {
             const std::uint32_t mtLen = b.u32(p + 8);
             if (mtLen < 24) break;
-            if (b.u32(p + 12) == 1) pl.name = readMhodString(b, p, mtLen);
+            if (b.u32(p + 12) == 1) {
+                pl.name = readMhodString(b, p, mtLen);
+            } else if (b.has(p, mtLen)) {
+                // Smart-playlist criteria live here; dropping them turns a
+                // smart playlist into a frozen list of whatever it held today.
+                pl.extraMhods.insert(pl.extraMhods.end(), &b.d[p],
+                                     &b.d[p] + mtLen);
+                ++pl.extraMhodCount;
+            }
             p += mtLen;
         }
         pl.trackIds.reserve(nItems);
@@ -196,8 +212,23 @@ ParseResult parseItunesDb(const fs::path& path) {
     if (mhbdHeaderLen >= 0x72) lib.hashingScheme = b.u16(0x70);
 
     const size_t fileEnd = std::min(b.d.size(), size_t(b.u32(8)));
+
+    // Look ahead for a real playlist dataset before parsing anything. Older
+    // databases put playlists in the type-3 slot, but modern ones use it for
+    // podcasts and can emit it *before* type 2 — so deciding as we go would
+    // misread 86 KB of podcast data as playlists and then discard it.
+    bool haveType2 = false;
+    for (size_t scan = mhbdHeaderLen;
+         scan + 16 <= fileEnd && b.tagIs(scan, "mhsd");) {
+        const std::uint32_t sHLen = b.u32(scan + 4);
+        const std::uint32_t sTLen = b.u32(scan + 8);
+        if (sHLen < 16 || sTLen < sHLen) break;
+        if (b.u32(scan + 12) == 2 && b.tagIs(scan + sHLen, "mhlp"))
+            haveType2 = true;
+        scan += sTLen;
+    }
+
     size_t pos = mhbdHeaderLen;
-    bool gotPlaylists = false;
     while (pos + 16 <= fileEnd && b.tagIs(pos, "mhsd")) {
         const std::uint32_t hLen = b.u32(pos + 4);
         const std::uint32_t tLen = b.u32(pos + 8);
@@ -209,11 +240,16 @@ ParseResult parseItunesDb(const fs::path& path) {
         } else if (type == 2 && b.tagIs(child, "mhlp")) {
             lib.playlists.clear();
             parsePlaylists(b, child, lib);
-            gotPlaylists = true;
-        } else if (type == 3 && !gotPlaylists && b.tagIs(child, "mhlp")) {
-            // Podcast dataset doubles as a playlist list on some versions;
-            // only used if no regular playlist dataset exists.
+        } else if (type == 3 && !haveType2 && b.tagIs(child, "mhlp")) {
+            // Only on databases old enough to keep playlists here.
             parsePlaylists(b, child, lib);
+        } else if (type != 1 && type != 2 && b.has(child, tLen - hLen)) {
+            // Podcasts, album lists, modern playlist datasets: not modelled,
+            // so kept whole rather than dropped on the next write.
+            Library::RawDataset raw;
+            raw.type = type;
+            raw.payload.assign(&b.d[child], &b.d[child] + (tLen - hLen));
+            lib.extraDatasets.push_back(std::move(raw));
         }
         pos += tLen;
     }

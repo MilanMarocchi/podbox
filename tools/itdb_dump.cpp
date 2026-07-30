@@ -2,6 +2,7 @@
 #include "itdb/itunesdb.h"
 
 #include <cstdio>
+#include <string>
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -27,6 +28,30 @@ int main(int argc, char** argv) {
     for (const auto& pl : lib.playlists)
         std::printf("playlist \"%s\" (%zu tracks)\n", pl.name.c_str(),
                     pl.trackIds.size());
+
+    // What PodBox does not model but must not destroy.
+    {
+        std::size_t trackExtra = 0, trackExtraCount = 0, plExtra = 0;
+        for (const auto& t : lib.tracks) {
+            trackExtra += t.extraMhods.size();
+            trackExtraCount += t.extraMhodCount;
+        }
+        for (const auto& pl : lib.playlists) plExtra += pl.extraMhods.size();
+        std::size_t rawHeaders = 0, dsBytes = 0;
+        for (const auto& t : lib.tracks) rawHeaders += t.rawHeader.size();
+        std::string dsTypes;
+        for (const auto& ds : lib.extraDatasets) {
+            dsBytes += ds.payload.size();
+            dsTypes += " " + std::to_string(ds.type);
+        }
+        std::printf(
+            "preserved: %zu unmodelled track mhods (%zu bytes), %zu bytes of "
+            "track headers, %zu bytes of playlist criteria, %zu extra "
+            "datasets (types%s, %zu bytes), dbversion 0x%x\n",
+            trackExtraCount, trackExtra, rawHeaders, plExtra,
+            lib.extraDatasets.size(), dsTypes.empty() ? " none" : dsTypes.c_str(),
+            dsBytes, lib.version);
+    }
 
     // Round-trip test: write the library back out, re-parse, compare.
     if (argc >= 3) {

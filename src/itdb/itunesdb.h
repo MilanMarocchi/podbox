@@ -28,12 +28,31 @@ struct Track {
     std::uint32_t mediaType = 1;  // 1 audio, 2 video, 4 podcast, 8 audiobook
     std::int64_t dateAdded = 0;   // unix time
     std::uint64_t dbid = 0;       // persistent id; generated when 0
+
+    // mhod records PodBox has no model for — sort keys, comments, album
+    // artist, artwork references. Carried through a read/write cycle verbatim
+    // so editing one song does not silently discard what iTunes or Apple Music
+    // stored alongside it.
+    std::vector<std::uint8_t> extraMhods;
+    std::uint32_t extraMhodCount = 0;
+
+    // The track's original fixed header, byte for byte. Apple Music writes a
+    // 624-byte header where PodBox models 328 bytes of it; re-emitting this
+    // and patching only the handful of fields PodBox edits keeps artwork
+    // references, gapless data and sort keys intact. Empty for new tracks,
+    // which get a freshly built header instead.
+    std::vector<std::uint8_t> rawHeader;
 };
 
 struct Playlist {
     std::string name;
     bool isMaster = false;
     std::vector<std::uint32_t> trackIds;
+    // Smart-playlist criteria (mhod 50/51) and anything else unmodelled.
+    // Without this a smart playlist is flattened to a static snapshot the
+    // first time PodBox writes.
+    std::vector<std::uint8_t> extraMhods;
+    std::uint32_t extraMhodCount = 0;
 };
 
 struct Library {
@@ -41,6 +60,16 @@ struct Library {
     std::vector<Playlist> playlists;  // master playlist excluded
     std::string masterName;
     std::uint32_t version = 0;
+
+    // Whole mhsd datasets PodBox does not model: podcasts, the album list
+    // (mhla/mhia), and the modern playlist dataset Apple Music writes. Kept in
+    // their original order and handed straight back, because writing the file
+    // without them discards real user data.
+    struct RawDataset {
+        std::uint32_t type = 0;
+        std::vector<std::uint8_t> payload;
+    };
+    std::vector<RawDataset> extraDatasets;
     // 0 = none (pre-2007 iPods), 1 = hash58, 2 = hash72. Read from the mhbd
     // header; tells us whether this device will accept unhashed DB writes.
     std::uint16_t hashingScheme = 0;

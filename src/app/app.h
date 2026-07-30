@@ -3,10 +3,19 @@
 #include "audio/player.h"
 #include "device/device_watcher.h"
 #include "itdb/itunesdb.h"
+#include "library/fingerprint_store.h"
+#include "library/dedupe.h"
+#include "library/applemusic.h"
+#include "library/host_library.h"
 #include "sync/sync_engine.h"
+#include "sync/sync_plan.h"
+#include "sync/verify_job.h"
 #include "ui/theme.h"
 
+#include <atomic>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -20,6 +29,9 @@ public:
     explicit App(const Fonts& fonts)
         : fonts_(fonts), player_(AudioPlayer::create()) {}
 
+    // Joins the scan worker so a rescan in flight cannot outlive the app.
+    ~App();
+
     // Draws one frame of the UI. Call between ImGui NewFrame/Render.
     void frame();
 
@@ -31,19 +43,66 @@ public:
     bool animating() const;
 
 private:
-    enum class View { Device, Music, Playlist };
+    // Which source the main panel is showing. Library is the Mac-side
+    // collection; Music/Playlist are the connected iPod's.
+    enum class View { Device, Music, Playlist, Library };
 
     void updateLibrary();
+    // The tracks currently on screen, and their id index — the Mac library's
+    // or the iPod's. Everything that merely displays tracks goes through
+    // these so one table serves both. Null when nothing is loaded.
+    const Library* shownLibrary() const;
+    const std::unordered_map<std::uint32_t, int>* shownIndex() const;
+    bool viewingHost() const { return view_ == View::Library; }
+    // Where a track's audio actually lives, whichever source it came from.
+    std::filesystem::path trackFilePath(const Track& t) const;
+    void rebuildHostView();
+    void rescanWatchFolders();
+    void pullPlayCountsToHost();
+    void applyFinishedScan();
     void rebuildVisible();
     void applyCompletedAdds();
     bool writeDatabase();
+    // True when Apple Music appears to be mid-sync on this device. Two
+    // writers on one iTunesDB is the one thing that can genuinely corrupt it.
+    bool appleMusicSyncing() const;
+    void rotateBackups(const std::filesystem::path& dbPath);
+    std::vector<std::filesystem::path> availableBackups() const;
+    void drawRestoreModal();
+    void drawFoldersModal();
+    void drawGetInfoModal();
+    void openGetInfo();
+    void drawSyncModal();
+    void refreshSyncPlan();
+    void startSync();
+    void drawAppleMusicModal();
+    void startAppleMusicRead();
+    void startAppleMusicCopy();
+    void applyFinishedAppleMusic();
+    // Sets a track's rating on whichever library is on screen, persisting it.
+    void setTrackRating(std::uint32_t trackId, int rating);
     void performDelete(std::uint32_t trackId);
+    // Removes many tracks with a single index rebuild and a single DB write.
+    // `remap` optionally redirects playlist references from a removed track to
+    // one that is being kept, so deduplicating never shortens a playlist.
+    // Returns how many tracks were actually removed.
+    int performDeleteMany(
+        const std::vector<std::uint32_t>& ids,
+        const std::unordered_map<std::uint32_t, std::uint32_t>* remap = nullptr);
     void drawDeleteModal();
+    void drawDuplicatesModal();
+    void refreshDuplicates();
+    void startVerifyPass();
     void drawDeletePlaylistModal();
     void setStatus(const std::string& msg);
     void createPlaylist(std::uint32_t withTrackId);
     void addToPlaylist(int playlistIndex, std::uint32_t trackId);
     void trackContextMenu(const Track& t);
+    bool isSelected(std::uint32_t trackId) const;
+    // Applies a click's modifiers to the selection. `row` is the index into
+    // visible_, so shift-ranges follow what is actually on screen.
+    void selectRow(int row, std::uint32_t trackId, bool shift, bool cmd);
+    void selectOnly(std::uint32_t trackId);
     void updateArtwork();
     void drawArtworkPane(float sidebarHeight);
     void updatePlayback();
@@ -63,6 +122,25 @@ private:
     DeviceWatcher watcher_;
 
     std::optional<Library> library_;
+    // The Mac-side library, plus a Library-shaped view of it so the track
+    // table, search, sorting and dedupe all work on it unchanged.
+    HostLibrary host_;
+    Library hostView_;
+    std::unordered_map<std::uint32_t, int> hostIndexById_;
+    // Set when the device's Play Counts file could not be matched to the
+    // track list. While true the file is preserved rather than deleted: it
+    // still holds real listening history that a later load may be able to
+    // merge.
+    bool playCountsUnmatched_ = false;
+    bool hostLoaded_ = false;
+    // A rescan runs on a worker over its own copy of the library and is
+    // swapped in when it finishes, so a cold scan of a large folder never
+    // blocks the frame loop.
+    std::thread scanThread_;
+    std::atomic<bool> scanFinished_{false};
+    std::unique_ptr<HostLibrary> scanResult_;
+    ScanStats scanStats_;
+    bool hostScanning_ = false;
     std::string libraryError_;
     std::filesystem::path loadedMount_;
     std::unordered_map<std::uint32_t, int> trackIndexById_;
@@ -75,16 +153,75 @@ private:
     bool visibleDirty_ = true;
     // (position in unsorted list, index into library tracks)
     std::vector<std::pair<int, int>> visible_;
+    // The primary selection (artwork, keyboard target). selection_ holds the
+    // whole set, which is usually just this one.
     std::uint32_t selectedTrackId_ = 0;
+    std::vector<std::uint32_t> selection_;
+    std::uint32_t selectionAnchor_ = 0;  // for shift-click ranges
 
     SyncEngine sync_;
     ImportFormat importFormat_ = ImportFormat::Original;
+    // Source fingerprints for the tracks on this device, so a re-drop of a
+    // file is recognised even when importing transcoded it.
+    FingerprintStore fingerprints_;
+    bool skipDuplicates_ = true;
     bool pendingDbWrite_ = false;
     int lastBatchAdded_ = 0;
+    int lastBatchSkipped_ = 0;
     std::uint32_t nextTrackId_ = 100;
     std::uint32_t deleteRequestId_ = 0;
     std::string statusMsg_;
     double statusMsgUntil_ = 0.0;
+
+    // Set after each of our own writes, so a fresher mtime on the device
+    // means somebody else touched it.
+    std::filesystem::file_time_type ownWriteTime_{};
+    bool restoreOpen_ = false;
+    bool foldersOpen_ = false;
+
+    // Apple Music import. The read and the copy both run on a worker: the
+    // read takes seconds, the copy can move gigabytes.
+    // Sync review. The plan is recomputed only when something that affects
+    // it changes, never per frame.
+    // Get Info. Editing many tracks at once leaves any field the user does
+    // not touch alone, which is why the "mixed" markers matter.
+    bool getInfoOpen_ = false;
+    char giTitle_[256] = {};
+    char giArtist_[256] = {};
+    char giAlbum_[256] = {};
+    char giGenre_[128] = {};
+    char giYear_[8] = {};
+    char giTrack_[8] = {};
+    bool giWriteTags_ = false;
+
+    bool syncOpen_ = false;
+    bool syncDirty_ = false;
+    SyncOptions syncOptions_;
+    SyncPlan syncPlan_;
+    bool syncConfirmRemove_ = false;
+
+    bool appleMusicOpen_ = false;
+    std::thread appleThread_;
+    std::atomic<bool> appleFinished_{false};
+    std::atomic<bool> appleCancel_{false};
+    std::atomic<int> appleDone_{0};
+    std::atomic<int> appleTotal_{0};
+    bool appleBusy_ = false;
+    bool appleCopying_ = false;
+    AppleMusicRead appleRead_;
+    CopyResult appleCopy_;
+    std::string appleCurrent_;
+    std::mutex appleMutex_;
+
+    // Duplicate review. Groups are recomputed only when something that
+    // affects them changes, not every frame.
+    bool duplicatesOpen_ = false;
+    bool duplicatesDirty_ = false;
+    MatchMode duplicateMode_ = MatchMode::Exact;
+    bool duplicatesIdenticalOnly_ = false;
+    std::vector<DuplicateGroup> duplicateGroups_;
+    std::vector<char> duplicateEnabled_;  // per group; char to stay indexable
+    VerifyJob verify_;
 
     // Playlist editing.
     int renamePlaylistIndex_ = -1;   // -1 = not renaming

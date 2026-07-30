@@ -69,9 +69,16 @@ add_library(podbox_core STATIC
   src/itdb/itunesdb_writer.cpp
   src/itdb/playcounts.cpp
   src/library/artwork.cpp
+  src/library/dedupe.cpp
+  src/library/fingerprint.cpp
+  src/library/fingerprint_store.cpp
+  src/library/applemusic.cpp
+  src/library/host_library.cpp
   src/library/metadata.cpp
   src/library/transcode.cpp
-  src/sync/sync_engine.cpp)
+  src/sync/sync_engine.cpp
+  src/sync/sync_plan.cpp
+  src/sync/verify_job.cpp)
 target_include_directories(podbox_core PUBLIC src)
 target_include_directories(podbox_core PRIVATE ${TAGLIB_INCLUDES}
   ${stb_SOURCE_DIR})
@@ -88,6 +95,7 @@ endif()
 add_executable(podbox
   src/main.cpp
   src/app/app.cpp
+  src/ui/aqua.cpp
   src/ui/theme.cpp
   ${PODBOX_AUDIO_SRC})
 target_link_libraries(podbox PRIVATE podbox_core imgui_lib)
@@ -105,6 +113,18 @@ target_link_libraries(podbox_add PRIVATE podbox_core)
 
 add_executable(playcounts_test tools/playcounts_test.cpp)
 target_link_libraries(playcounts_test PRIVATE podbox_core)
+
+add_executable(dedupe_test tools/dedupe_test.cpp)
+target_link_libraries(dedupe_test PRIVATE podbox_core)
+
+add_executable(library_test tools/library_test.cpp)
+target_link_libraries(library_test PRIVATE podbox_core)
+
+add_executable(applemusic_test tools/applemusic_test.cpp)
+target_link_libraries(applemusic_test PRIVATE podbox_core)
+
+add_executable(sync_test tools/sync_test.cpp)
+target_link_libraries(sync_test PRIVATE podbox_core)
 
 if(APPLE)
   add_executable(audio_test tools/audio_test.cpp ${PODBOX_AUDIO_SRC})

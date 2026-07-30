@@ -14,16 +14,20 @@ void applyStyle() {
     ImGuiStyle& s = ImGui::GetStyle();
     s.WindowRounding = 0.0f;
     s.ChildRounding = 0.0f;
-    s.PopupRounding = 4.0f;
-    s.FrameRounding = 3.0f;
-    s.ScrollbarRounding = 8.0f;
-    s.GrabRounding = 3.0f;
+    s.PopupRounding = 5.0f;
+    // Aqua text fields and checkboxes were softly rounded, not square.
+    s.FrameRounding = 4.0f;
+    s.ScrollbarRounding = 7.0f;
+    s.GrabRounding = 4.0f;
+    s.FrameBorderSize = 1.0f;
     s.WindowBorderSize = 0.0f;
     s.ChildBorderSize = 0.0f;
-    s.FramePadding = ImVec2(6, 3);
-    s.ItemSpacing = ImVec2(8, 5);
+    s.FramePadding = ImVec2(6, 4);
+    s.ItemSpacing = ImVec2(8, 6);
+    s.ItemInnerSpacing = ImVec2(6, 4);
     s.CellPadding = ImVec2(6, 3);
     s.ScrollbarSize = 15.0f;
+    s.WindowTitleAlign = ImVec2(0.5f, 0.5f);
 
     ImVec4* c = s.Colors;
     c[ImGuiCol_Text] = v4(pal::rgb(30, 30, 30));
@@ -32,8 +36,11 @@ void applyStyle() {
     c[ImGuiCol_PopupBg] = v4(pal::rgb(246, 246, 246));
     c[ImGuiCol_Border] = v4(pal::rgb(170, 175, 182));
     c[ImGuiCol_FrameBg] = v4(pal::rgb(255, 255, 255));
-    c[ImGuiCol_FrameBgHovered] = v4(pal::rgb(242, 246, 251));
-    c[ImGuiCol_FrameBgActive] = v4(pal::rgb(229, 238, 248));
+    c[ImGuiCol_FrameBgHovered] = v4(pal::rgb(250, 252, 255));
+    c[ImGuiCol_FrameBgActive] = v4(pal::rgb(255, 255, 255));
+    c[ImGuiCol_CheckMark] = v4(pal::rgb(44, 96, 190));
+    c[ImGuiCol_SliderGrab] = v4(pal::rgb(150, 155, 162));
+    c[ImGuiCol_SliderGrabActive] = v4(pal::rgb(110, 116, 124));
     c[ImGuiCol_Button] = v4(pal::rgb(250, 250, 250));
     c[ImGuiCol_ButtonHovered] = v4(pal::rgb(235, 241, 249));
     c[ImGuiCol_ButtonActive] = v4(pal::rgb(216, 227, 240));
@@ -44,9 +51,12 @@ void applyStyle() {
     c[ImGuiCol_ScrollbarGrab] = v4(pal::rgb(195, 195, 195));
     c[ImGuiCol_ScrollbarGrabHovered] = v4(pal::rgb(170, 170, 170));
     c[ImGuiCol_ScrollbarGrabActive] = v4(pal::rgb(150, 150, 150));
-    c[ImGuiCol_Separator] = v4(pal::rgb(205, 209, 214));
-    c[ImGuiCol_TableHeaderBg] = v4(pal::rgb(245, 245, 245));
-    c[ImGuiCol_TableBorderStrong] = v4(pal::rgb(190, 194, 200));
+    c[ImGuiCol_Separator] = v4(pal::rgb(198, 202, 208));
+    c[ImGuiCol_TitleBg] = v4(pal::rgb(226, 226, 226));
+    c[ImGuiCol_TitleBgActive] = v4(pal::rgb(212, 212, 212));
+    c[ImGuiCol_ModalWindowDimBg] = ImVec4(0.15f, 0.16f, 0.18f, 0.28f);
+    c[ImGuiCol_TableHeaderBg] = v4(pal::rgb(238, 240, 243));
+    c[ImGuiCol_TableBorderStrong] = v4(pal::rgb(176, 181, 188));
     c[ImGuiCol_TableBorderLight] = v4(pal::rgb(222, 226, 231));
     c[ImGuiCol_TableRowBg] = v4(pal::rgb(255, 255, 255));
     c[ImGuiCol_TableRowBgAlt] = v4(pal::RowAlt);

@@ -33,7 +33,11 @@ PlayCountsMerge mergePlayCounts(const fs::path& file, Library& lib) {
     out.entries = int(numEntries);
 
     // Positional format: only safe to apply when it matches our track list.
-    if (numEntries != lib.tracks.size()) return out;
+    out.trackCount = int(lib.tracks.size());
+    if (numEntries != lib.tracks.size()) {
+        out.mismatched = true;
+        return out;
+    }
     if (headerLen + std::uint64_t(numEntries) * entryLen > d.size()) return out;
 
     for (std::uint32_t i = 0; i < numEntries; ++i) {

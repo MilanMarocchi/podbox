@@ -71,4 +71,26 @@ FileMeta readFileMetadata(const fs::path& path) {
     return out;
 }
 
+bool writeFileTags(const fs::path& path, const Track& meta,
+                   std::string* error) {
+    TagLib::FileRef f(path.c_str());
+    if (f.isNull() || !f.tag()) {
+        if (error)
+            *error = path.filename().string() + ": cannot write tags here";
+        return false;
+    }
+    TagLib::Tag* tag = f.tag();
+    tag->setTitle(TagLib::String(meta.title, TagLib::String::UTF8));
+    tag->setArtist(TagLib::String(meta.artist, TagLib::String::UTF8));
+    tag->setAlbum(TagLib::String(meta.album, TagLib::String::UTF8));
+    tag->setGenre(TagLib::String(meta.genre, TagLib::String::UTF8));
+    tag->setYear(meta.year);
+    tag->setTrack(meta.trackNumber);
+    if (!f.save()) {
+        if (error) *error = path.filename().string() + ": could not save tags";
+        return false;
+    }
+    return true;
+}
+
 }  // namespace podbox

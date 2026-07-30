@@ -1,5 +1,6 @@
 #include "sync/sync_engine.h"
 
+#include "library/dedupe.h"
 #include "library/metadata.h"
 #include "library/transcode.h"
 
@@ -58,12 +59,14 @@ SyncEngine::~SyncEngine() {
 }
 
 void SyncEngine::queueAdds(const std::vector<fs::path>& files,
-                           const fs::path& mount, ImportFormat fmt) {
+                           const fs::path& mount, ImportFormat fmt,
+                           DupeGuard guard) {
     if (files.empty()) return;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         mount_ = mount;
         importFmt_ = fmt;
+        guard_ = std::move(guard);
         for (const auto& f : files) pending_.push_back(f);
         if (!working_.load() && pending_.size() == files.size()) {
             // Fresh batch: reset progress counters.
@@ -95,6 +98,28 @@ std::string SyncEngine::currentName() const {
     return current_;
 }
 
+bool SyncEngine::isDuplicate(const Track& meta, const fs::path& src,
+                             AudioFingerprint* fp) {
+    // Hash before taking the lock: this reads the file, and the UI thread
+    // polls takeCompleted() under the same mutex every frame.
+    *fp = fingerprintFile(src);
+    const std::string key = duplicateKey(meta, MatchMode::Exact);
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!guard_.enabled) return false;
+    // A fingerprint hit is certain; a metadata hit is near-certain and is the
+    // only thing that works once a file has been transcoded on the way in.
+    if (fp->ok() && guard_.hashes.count(fp->hash)) return true;
+    return !key.empty() && guard_.metaKeys.count(key) > 0;
+}
+
+void SyncEngine::noteImported(const Track& track, const AudioFingerprint& fp) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (fp.ok()) guard_.hashes.insert(fp.hash);
+    const std::string key = duplicateKey(track, MatchMode::Exact);
+    if (!key.empty()) guard_.metaKeys.insert(key);
+}
+
 void SyncEngine::run() {
     for (;;) {
         fs::path src, mount;
@@ -116,6 +141,10 @@ void SyncEngine::run() {
         FileMeta meta = readFileMetadata(src);
         if (!meta.ok) {
             result.error = meta.error;
+        } else if (isDuplicate(meta.track, src, &result.fp)) {
+            // Already on the device: skip the copy entirely rather than
+            // writing a second file and letting the UI clean it up later.
+            result.duplicate = true;
         } else {
             const std::string ext = importExtension(fmt, src);
             std::string location;
@@ -135,6 +164,8 @@ void SyncEngine::run() {
                 const std::uint32_t sz =
                     std::uint32_t(fs::file_size(dest, ec));
                 if (!ec) result.track.sizeBytes = sz;
+                // Remember it so the rest of this batch dedupes against it.
+                noteImported(result.track, result.fp);
             }
         }
 

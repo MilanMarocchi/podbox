@@ -113,26 +113,40 @@ std::uint32_t toMacTime(std::int64_t unixTime) {
 }
 
 Bytes mhit(const Track& t, std::uint64_t fallbackDbid) {
-    Bytes b = chunk("mhit", 0x148);
+    // Start from the header this track arrived with, so every field PodBox
+    // does not model — artwork references, gapless data, sort keys — survives.
+    // Only a freshly imported track needs one built from nothing.
+    Bytes b = t.rawHeader.empty() ? chunk("mhit", 0x148)
+                                  : Bytes(t.rawHeader.begin(), t.rawHeader.end());
+    // Patch only within the header we actually have.
+    auto put32 = [&b](std::size_t off, std::uint32_t v) {
+        if (off + 4 <= b.size()) set32(b, off, v);
+    };
+    auto put64 = [&b](std::size_t off, std::uint64_t v) {
+        if (off + 8 <= b.size()) set64(b, off, v);
+    };
+    auto put8 = [&b](std::size_t off, std::uint8_t v) {
+        if (off + 1 <= b.size()) set8(b, off, v);
+    };
     set32(b, 16, t.id);
-    set32(b, 20, 1);  // visible
-    set32(b, 24, filetypeMarker(t.location));
+    put32(20, 1);  // visible
+    put32(24, filetypeMarker(t.location));
     const bool mp3 = filetypeMarker(t.location) == 0x4D503320;  // "MP3 "
-    set8(b, 29, mp3 ? 1 : 0);
-    set8(b, 31, t.rating);
-    set32(b, 32, toMacTime(t.dateAdded));  // date modified
-    set32(b, 36, t.sizeBytes);
-    set32(b, 40, t.lengthMs);
-    set32(b, 44, t.trackNumber);
-    set32(b, 52, t.year);
-    set32(b, 56, t.bitrate);
-    set32(b, 60, t.sampleRate << 16);
-    set32(b, 80, t.playCount);
-    set32(b, 84, t.playCount);
-    set32(b, 92, t.discNumber);
-    set32(b, 104, toMacTime(t.dateAdded));
-    set64(b, 112, t.dbid ? t.dbid : fallbackDbid);
-    set32(b, 208, t.mediaType ? t.mediaType : 1);
+    put8(29, mp3 ? 1 : 0);
+    put8(31, t.rating);
+    put32(32, toMacTime(t.dateAdded));  // date modified
+    put32(36, t.sizeBytes);
+    put32(40, t.lengthMs);
+    put32(44, t.trackNumber);
+    put32(52, t.year);
+    put32(56, t.bitrate);
+    put32(60, t.sampleRate << 16);
+    put32(80, t.playCount);
+    put32(84, t.playCount);
+    put32(92, t.discNumber);
+    put32(104, toMacTime(t.dateAdded));
+    put64(112, t.dbid ? t.dbid : fallbackDbid);
+    put32(208, t.mediaType ? t.mediaType : 1);
 
     std::uint32_t nMhods = 0;
     Bytes body;
@@ -147,6 +161,11 @@ Bytes mhit(const Track& t, std::uint64_t fallbackDbid) {
     add(4, t.artist);
     add(5, t.genre);
     add(12, t.composer);
+    // Hand back anything the parser could not model — artwork references,
+    // sort keys, album artist — exactly as it arrived.
+    body.insert(body.end(), t.extraMhods.begin(), t.extraMhods.end());
+    nMhods += t.extraMhodCount;
+    set32(b, 4, std::uint32_t(b.size()));  // header length, whatever it is
     set32(b, 8, std::uint32_t(b.size() + body.size()));
     set32(b, 12, nMhods);
     append(b, body);
@@ -167,7 +186,8 @@ Bytes mhip(std::uint32_t trackId, std::uint32_t position, std::uint32_t now) {
 
 Bytes mhyp(const std::string& name, bool master,
            const std::vector<std::uint32_t>& trackIds, std::uint32_t now,
-           std::uint64_t ppid) {
+           std::uint64_t ppid, const std::vector<std::uint8_t>& extraMhods,
+           std::uint32_t extraMhodCount) {
     Bytes b = chunk("mhyp", 0x6C);
     set8(b, 20, master ? 1 : 0);
     set32(b, 24, now);
@@ -179,6 +199,11 @@ Bytes mhyp(const std::string& name, bool master,
         append(body, mhodString(1, name));
         ++nMhods;
     }
+    // Smart-playlist criteria must precede the track entries, matching the
+    // order iTunes writes them in.
+    body.insert(body.end(), extraMhods.begin(), extraMhods.end());
+    nMhods += extraMhodCount;
+
     std::uint32_t position = 1;
     for (const std::uint32_t id : trackIds)
         append(body, mhip(id, position++, now));
@@ -219,22 +244,39 @@ bool writeItunesDb(const Library& lib, const fs::path& path,
     set32(mhlp, 8, std::uint32_t(1 + lib.playlists.size()));
     const std::string masterName =
         lib.masterName.empty() ? "iPod" : lib.masterName;
-    append(mhlp, mhyp(masterName, true, allIds, now, rng()));
+    append(mhlp, mhyp(masterName, true, allIds, now, rng(), {}, 0));
     for (const Playlist& pl : lib.playlists)
-        append(mhlp, mhyp(pl.name, false, pl.trackIds, now, rng()));
+        append(mhlp, mhyp(pl.name, false, pl.trackIds, now, rng(),
+                          pl.extraMhods, pl.extraMhodCount));
 
-    // Empty podcast dataset keeps the firmware's Podcasts menu happy.
-    Bytes podcastMhlp = chunk("mhlp", 0x5C);
+    // Everything else the device had — podcasts, the album list, Apple
+    // Music's own playlist dataset — goes back exactly as it came in.
+    Bytes extras;
+    std::uint32_t extraCount = 0;
+    bool sawPodcasts = false;
+    for (const auto& ds : lib.extraDatasets) {
+        append(extras, mhsd(ds.type, Bytes(ds.payload.begin(), ds.payload.end())));
+        ++extraCount;
+        if (ds.type == 3) sawPodcasts = true;
+    }
+    if (!sawPodcasts) {
+        // An empty podcast dataset keeps the firmware's Podcasts menu happy.
+        append(extras, mhsd(3, chunk("mhlp", 0x5C)));
+        ++extraCount;
+    }
 
     Bytes db = chunk("mhbd", 0xF4);
     set32(db, 12, 1);
-    set32(db, 16, 0x19);  // dbversion, iTunes 7.x era
-    set32(db, 20, 3);     // child mhsd count
+    // Keep whatever version this device's database already declared. Writing
+    // an older one back invites Apple Music to treat the iPod as foreign and
+    // re-sync it from scratch.
+    set32(db, 16, lib.version ? lib.version : 0x19);
+    set32(db, 20, 2 + extraCount);  // child mhsd count
     set64(db, 24, rng());
     set16(db, 32, 2);
     append(db, mhsd(1, mhlt));
     append(db, mhsd(2, mhlp));
-    append(db, mhsd(3, podcastMhlp));
+    append(db, extras);
     set32(db, 8, std::uint32_t(db.size()));
 
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
