@@ -92,13 +92,34 @@ else()
   set(PODBOX_AUDIO_SRC src/audio/player_null.cpp)
 endif()
 
-add_executable(podbox
+# On macOS this builds PodBox.app rather than a bare binary: a bundle is what
+# lets it carry an icon, its Info.plist usage strings (without which macOS
+# refuses to let it ask Music.app for anything), and be dragged to
+# /Applications like any other app.
+set(PODBOX_ICON ${CMAKE_CURRENT_SOURCE_DIR}/packaging/PodBox.icns)
+
+add_executable(podbox MACOSX_BUNDLE
   src/main.cpp
   src/app/app.cpp
   src/ui/aqua.cpp
   src/ui/theme.cpp
-  ${PODBOX_AUDIO_SRC})
+  ${PODBOX_AUDIO_SRC}
+  $<$<BOOL:${APPLE}>:${PODBOX_ICON}>)
 target_link_libraries(podbox PRIVATE podbox_core imgui_lib)
+
+if(APPLE)
+  set_target_properties(podbox PROPERTIES
+    OUTPUT_NAME "PodBox"
+    MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/packaging/Info.plist.in
+    MACOSX_BUNDLE_GUI_IDENTIFIER com.milanmarocchi.podbox
+    MACOSX_BUNDLE_BUNDLE_NAME PodBox
+    MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+    MACOSX_BUNDLE_COPYRIGHT "© 2026 Milan Marocchi. MIT licensed.")
+  # Icons belong in Contents/Resources.
+  set_source_files_properties(${PODBOX_ICON} PROPERTIES
+    MACOSX_PACKAGE_LOCATION Resources)
+endif()
 
 if(APPLE)
   target_link_libraries(podbox PRIVATE
