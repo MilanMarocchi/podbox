@@ -93,6 +93,7 @@ set(TAGLIB_INCLUDES
 add_library(podbox_core STATIC
   src/device/device_watcher.cpp
   src/device/ipod_device.cpp
+  src/itdb/hash58.cpp
   src/itdb/itunesdb.cpp
   src/itdb/itunesdb_writer.cpp
   src/itdb/playcounts.cpp
@@ -193,6 +194,9 @@ target_link_libraries(sync_test PRIVATE podbox_core)
 add_executable(ui_test tools/ui_test.cpp src/app/app_util.cpp)
 target_link_libraries(ui_test PRIVATE podbox_core imgui_lib)
 
+add_executable(hash58_test tools/hash58_test.cpp)
+target_link_libraries(hash58_test PRIVATE podbox_core)
+
 if(APPLE)
   add_executable(audio_test tools/audio_test.cpp ${PODBOX_AUDIO_SRC})
   target_include_directories(audio_test PRIVATE src)
@@ -230,6 +234,7 @@ endif()
 if(PODBOX_INSTALL_TOOLS)
   install(TARGETS itdb_dump podbox_add playcounts_test dedupe_test
                   library_test applemusic_test sync_test ui_test
+                  hash58_test
           RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
@@ -238,6 +243,7 @@ endif()
 enable_testing()
 add_test(NAME dedupe COMMAND dedupe_test)
 add_test(NAME ui COMMAND ui_test)
+add_test(NAME hash58 COMMAND hash58_test)
 
 # A DMG for releases: `cpack -G DragNDrop --config build/CPackConfig.cmake`,
 # or `cmake --build build --target package`. Unsigned, like the app itself,

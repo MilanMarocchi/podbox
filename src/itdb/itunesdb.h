@@ -95,8 +95,17 @@ ParseResult parseItunesDb(const std::filesystem::path& path);
 // Serializes a library as an iTunes-7-era iTunesDB (dbversion 0x19, no
 // hash) — the dialect classic iPod firmwares accept. The master playlist is
 // regenerated from the track list. Returns false and sets `error` on failure.
+// Extra requirements for a write. Empty means "none", which is what an iPod
+// that needs no checksum wants.
+struct WriteOptions {
+    // The 8 raw bytes of the device's FireWire GUID. When set, the finished
+    // image is checksummed with hash58 before it is written — which iPod
+    // classic and nano 3G-5G require, and which is meaningless elsewhere.
+    std::vector<std::uint8_t> hash58Guid;
+};
+
 bool writeItunesDb(const Library& lib, const std::filesystem::path& path,
-                   std::string* error);
+                   std::string* error, const WriteOptions& opts = {});
 
 // "3:07", "1:02:45"
 std::string formatDuration(std::uint32_t ms);

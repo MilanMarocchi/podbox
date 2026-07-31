@@ -1,5 +1,7 @@
 #include "itdb/itunesdb.h"
 
+#include "itdb/hash58.h"
+
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -226,7 +228,7 @@ Bytes mhsd(std::uint32_t type, const Bytes& child) {
 }  // namespace
 
 bool writeItunesDb(const Library& lib, const fs::path& path,
-                   std::string* error) {
+                   std::string* error, const WriteOptions& opts) {
     std::mt19937_64 rng{std::random_device{}()};
     const std::uint32_t now = toMacTime(std::time(nullptr));
 
@@ -278,6 +280,19 @@ bool writeItunesDb(const Library& lib, const fs::path& path,
     append(db, mhsd(2, mhlp));
     append(db, extras);
     set32(db, 8, std::uint32_t(db.size()));
+
+    // Devices from the iPod classic on reject a database whose checksum does
+    // not match, and show an empty library instead. The scheme has to be
+    // declared in the header as well as satisfied.
+    if (!opts.hash58Guid.empty()) {
+        set16(db, 0x70, 1);  // ITDB_CHECKSUM_HASH58
+        std::vector<std::uint8_t> image(db.begin(), db.end());
+        if (!writeHash58(image, opts.hash58Guid)) {
+            if (error) *error = "Could not compute this iPod's checksum";
+            return false;
+        }
+        db.assign(image.begin(), image.end());
+    }
 
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out || !out.write(reinterpret_cast<const char*>(db.data()),

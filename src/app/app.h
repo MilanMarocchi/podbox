@@ -86,6 +86,11 @@ private:
     // when this is false — the UI calls it too, so the affected controls are
     // disabled rather than failing after the user commits to something.
     bool writesSupported() const;
+    // Proves hash58 against the device's own database before ever writing
+    // one. The iPod already accepts what is on it, so recomputing that file's
+    // checksum and comparing it to the stored one settles whether PodBox can
+    // produce a checksum this device will accept — without risking anything.
+    void verifyHash58();
     // True when Apple Music appears to be mid-sync on this device. Two
     // writers on one iTunesDB is the one thing that can genuinely corrupt it.
     bool appleMusicSyncing() const;
@@ -168,6 +173,11 @@ private:
         bool running = false;
     };
     HostScan scan_;
+
+    // Set only when verifyHash58() has confirmed PodBox reproduces the
+    // checksum already on the device. Writes stay refused until it does.
+    bool hash58Verified_ = false;
+    std::vector<std::uint8_t> hash58Guid_;
 
     std::string libraryError_;
     std::filesystem::path loadedMount_;

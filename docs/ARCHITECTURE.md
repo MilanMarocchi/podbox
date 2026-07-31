@@ -63,8 +63,22 @@ little more on every write. So three things are carried through verbatim:
 writes, re-parses and compares field by field, reporting how much was
 preserved. Run it against a real database after touching anything in `itdb/`.
 
-**What is not modelled:** the hash58/hash72 checksums (the scheme is read from
-the header and writes are refused when one is required), artwork on the device,
+**Checksums.** Newer devices sign the database. `hash58.cpp` implements the
+scheme iPod classic and nano 3G–5G use — HMAC-SHA1 over the image with three
+header fields zeroed, keyed by a value derived from the device's FireWire GUID.
+The algorithm was reverse-engineered by wtbw and first implemented by Christophe
+Fergeau for libgpod under a 3-clause BSD licence, which is why that notice is
+reproduced at the top of the file.
+
+Its correctness is established in two halves. SHA-1, HMAC-SHA1, the derived key
+and the AES S-boxes are covered by `hash58_test` against published vectors — and
+the S-boxes are *generated* rather than tabulated, so there is no page of magic
+constants to mistype. The composition is proven per-device at runtime by
+`App::verifyHash58()`, which recomputes the checksum of the database the iPod is
+already using and compares it to the stored one. Writes to a hash58 device are
+refused until that matches. hash72 is not implemented.
+
+**What is not modelled:** artwork on the device,
 Soundcheck, podcast episode metadata, audiobook resume positions, and the
 on-the-go playlists in the `Play Counts` file.
 

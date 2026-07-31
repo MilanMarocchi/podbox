@@ -824,7 +824,11 @@ void App::drawDeviceView(const IpodInfo& dev) {
             dbInfo = std::to_string(library_->tracks.size()) + " songs";
             switch (library_->hashingScheme) {
                 case 0: dbInfo += " — writable, no hash required"; break;
-                case 1: dbInfo += " — writes require hash58"; break;
+                case 1:
+                    dbInfo += hash58Verified_
+                                  ? " — hash58 verified against this iPod"
+                                  : " — writes require hash58 (unverified)";
+                    break;
                 case 2: dbInfo += " — writes require hash72"; break;
                 default:
                     dbInfo += " — unknown hash scheme";
@@ -919,7 +923,11 @@ void App::drawDeviceView(const IpodInfo& dev) {
     if (ImGui::Button("Restore Database…")) restoreOpen_ = true;
     ImGui::EndDisabled();
     ImGui::PushFont(fonts_.label);
-    if (!writesSupported())
+    if (!writesSupported() && library_ && library_->hashingScheme == 1)
+        ImGui::TextColored(v4(pal::Warning),
+                           "PodBox could not reproduce this iPod's checksum, "
+                           "so it stays read-only. Nothing will be changed.");
+    else if (!writesSupported())
         ImGui::TextColored(v4(pal::Warning),
                            "This iPod's database carries a checksum PodBox "
                            "cannot produce yet, so it is read-only here. "

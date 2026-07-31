@@ -6,6 +6,7 @@
 #include "app/app_util.h"
 
 #include "device/ipod_device.h"
+#include "itdb/hash58.h"
 #include "itdb/playcounts.h"
 #include "library/artwork.h"
 #include "library/dedupe.h"
@@ -28,6 +29,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <ctime>
 #include <random>
 #include <string>
@@ -253,7 +255,40 @@ std::vector<fs::path> App::availableBackups() const {
 }
 
 bool App::writesSupported() const {
-    return library_ && library_->hashingScheme == 0;
+    if (!library_) return false;
+    if (library_->hashingScheme == 0) return true;
+    // hash58 devices become writable only once we have shown we can reproduce
+    // the checksum they already carry.
+    return library_->hashingScheme == 1 && hash58Verified_;
+}
+
+void App::verifyHash58() {
+    hash58Verified_ = false;
+    hash58Guid_.clear();
+    if (!library_ || library_->hashingScheme != 1) return;
+
+    const auto& dev = watcher_.device();
+    if (!dev) return;
+    const std::vector<std::uint8_t> guid =
+        parseFirewireGuid(dev->firewireGuid);
+    if (guid.empty()) {
+        setStatus("This iPod needs a checksum, but its FireWire GUID is missing");
+        return;
+    }
+
+    std::ifstream in(loadedMount_ / "iPod_Control" / "iTunes" / "iTunesDB",
+                     std::ios::binary);
+    if (!in) return;
+    std::vector<std::uint8_t> image((std::istreambuf_iterator<char>(in)),
+                                    std::istreambuf_iterator<char>());
+    const std::vector<std::uint8_t> stored = storedHash58(image);
+    const std::vector<std::uint8_t> computed = hash58OfDatabase(image, guid);
+    if (computed.empty() || stored != computed) {
+        setStatus("Could not reproduce this iPod's checksum — staying read-only");
+        return;
+    }
+    hash58Verified_ = true;
+    hash58Guid_ = guid;
 }
 
 bool App::writeDatabase() {
@@ -280,7 +315,9 @@ bool App::writeDatabase() {
 
     const fs::path tmp = dbPath.string() + ".podbox-tmp";
     std::string err;
-    if (!writeItunesDb(*library_, tmp, &err)) {
+    WriteOptions opts;
+    if (library_->hashingScheme == 1) opts.hash58Guid = hash58Guid_;
+    if (!writeItunesDb(*library_, tmp, &err, opts)) {
         setStatus(err);
         return false;
     }
@@ -601,6 +638,7 @@ void App::updateLibrary() {
         }
     }
 
+    verifyHash58();
     pullPlayCountsToHost();
 
     switchSource(library_ ? View::Music : View::Device);

@@ -103,18 +103,33 @@ PodBox reads the library of **any classic-line iPod** — 1st through 5.5th
 generation, iPod mini, iPod photo, and iPod nano/classic — by parsing the
 `iTunesDB` directly.
 
-**Writing** (adding/removing songs and playlists) currently works on iPods
-whose database needs no checksum: **iPod 1st–5.5th generation, iPod mini, iPod
-photo, and iPod nano 1st/2nd generation.** PodBox reads the required hashing
-scheme from the database header and refuses to write — rather than risk
-corrupting the library — on models that need a checksum it does not yet
-produce. On those devices PodBox is strictly read-only: the affected controls
-are disabled and the device pane says why.
+**Writing** (adding/removing songs and playlists) works without qualification
+on iPods whose database needs no checksum: **iPod 1st–5.5th generation, iPod
+mini, iPod photo, and iPod nano 1st/2nd generation.**
+
+Newer models sign their database, and PodBox reads the required scheme from the
+header. For **hash58** — iPod classic 6G/7G and nano 3G–5G — it implements the
+checksum and then *proves it against your device before using it*: on connect it
+recomputes the hash of the database already on the iPod, which the device
+plainly accepts, and compares it with the one stored inside. Writes are enabled
+only if those match. If they don't, PodBox stays read-only and says so.
+
+That check costs nothing and risks nothing — it reads a file the iPod wrote —
+and it is the difference between "this algorithm should work" and "this
+algorithm works on the iPod in front of you". You can run it by hand too:
+
+```sh
+itdb_dump --check-hash58 /Volumes/IPOD/iPod_Control/iTunes/iTunesDB <FireWireGUID>
+```
+
+The GUID is in `iPod_Control/Device/SysInfoExtended`, under `FireWireGUID`.
+
+**hash72** (nano 6G/7G) is not implemented, and those devices stay read-only.
 
 | Model | Read | Write |
 |---|---|---|
 | iPod 1st–5.5th gen, mini, photo, nano 1G/2G | ✅ | ✅ |
-| iPod classic (6G/7G), nano 3G–5G | ✅ | ⛔ needs *hash58* (planned) |
+| iPod classic (6G/7G), nano 3G–5G | ✅ | ⚠️ *hash58*, self-verified on connect |
 | iPod nano 6G/7G | ✅ | ⛔ needs *hash72* |
 | iPod shuffle | — | — separate `iTunesSD` format (planned) |
 | iPod touch / iPhone | — | — different sync protocol, out of scope |
