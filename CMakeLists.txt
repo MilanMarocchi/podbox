@@ -85,6 +85,8 @@ set(TAGLIB_INCLUDES
   ${taglib_SOURCE_DIR}/taglib/mpeg/id3v2
   ${taglib_SOURCE_DIR}/taglib/mpeg/id3v2/frames
   ${taglib_SOURCE_DIR}/taglib/mp4
+  ${taglib_SOURCE_DIR}/taglib/flac
+  ${taglib_SOURCE_DIR}/taglib/ogg
   ${taglib_BINARY_DIR}
   ${taglib_BINARY_DIR}/taglib)
 

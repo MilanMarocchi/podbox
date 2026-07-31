@@ -10,6 +10,7 @@
 #include "library/dedupe.h"
 #include "library/fingerprint.h"
 #include "library/fingerprint_store.h"
+#include "library/artwork.h"
 #include "library/metadata.h"
 
 #include <cstdio>
@@ -314,6 +315,28 @@ void testStore() {
     fs::remove_all(mount, ec);
 }
 
+// Cover art, for whichever of the three container families the sample is.
+// Conditional on a real file, because there is no way to assert on artwork
+// without one — but when a file is supplied this is what catches a container
+// PodBox silently returns nothing for, which is how FLAC went unnoticed.
+void testArtwork(const fs::path& sample) {
+    std::printf("artwork\n");
+    if (sample.empty()) {
+        std::printf("  (skipped: no audio file supplied)\n");
+        return;
+    }
+    const podbox::ArtImage art = podbox::loadEmbeddedArtwork(sample);
+    if (art.width == 0) {
+        // Not a failure: plenty of files genuinely carry no cover.
+        std::printf("  (no embedded art in %s)\n",
+                    sample.filename().string().c_str());
+        return;
+    }
+    check(art.width > 0 && art.height > 0, "decoded art has real dimensions");
+    checkEq((long long)art.rgba.size(),
+            (long long)art.width * art.height * 4, "RGBA buffer matches WxH");
+}
+
 void testFingerprint(const fs::path& sample) {
     std::printf("fingerprint\n");
     if (sample.empty()) {
@@ -480,6 +503,7 @@ int main(int argc, char** argv) {
         if (!files.empty()) sample = files.front();
     }
     testFingerprint(sample);
+    testArtwork(sample);
     testTagWriting(sample);
 
     if (!root.empty()) scanFolder(root, argc > 2);
