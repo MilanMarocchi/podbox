@@ -103,6 +103,9 @@ set(PODBOX_ICON ${CMAKE_CURRENT_SOURCE_DIR}/packaging/PodBox.icns)
 add_executable(podbox MACOSX_BUNDLE
   src/main.cpp
   src/app/app.cpp
+  src/app/app_chrome.cpp
+  src/app/app_modals.cpp
+  src/app/app_util.cpp
   src/ui/aqua.cpp
   src/ui/theme.cpp
   ${PODBOX_AUDIO_SRC}
