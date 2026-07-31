@@ -45,6 +45,11 @@ styled after iTunes 10.
 - **Import in any format** — drop in MP3, AAC, ALAC, WAV, AIFF, or **FLAC**.
   Choose to keep files as-is, or convert everything to Apple Lossless (ALAC) or
   MP3 on import. FLAC is always converted so it plays on the iPod.
+- **Podcasts and audiobooks** are filed as their own media type and get their
+  own sidebar entries, which appear only when the device holds some. Imports
+  are classified from the file: `.m4b` is an audiobook, and a Podcast or
+  spoken-word genre is taken at its word. Anything else is music, including
+  everything imported before PodBox recorded the distinction.
 - **Safe eject** — click the eject button next to the device to flush and
   unmount before you unplug.
 
@@ -294,7 +299,9 @@ file that is merged on connect.
 
 - `hash58` checksum so iPod classic and nano 3G–5G can be written
 - Album artwork **on** the device (`ArtworkDB` + `.ithmb` thumbnails)
-- Podcasts and audiobooks as first-class media types
+- Podcast episode metadata (description, release date) and audiobook
+  resume-position, which need parts of the database PodBox carries through
+  verbatim but does not yet model
 - iPod shuffle (`iTunesSD`) support
 - Code signing and notarisation, so Gatekeeper stops complaining
 - Linux build (audio backend + device layer)

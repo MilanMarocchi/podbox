@@ -418,6 +418,32 @@ void scanFolder(const fs::path& root, bool verbose) {
 
 }  // namespace
 
+// Media type decides which sidebar list a track lands in and whether the iPod
+// keeps it out of shuffle, so the classification is worth pinning down.
+void testMediaTypes() {
+    std::printf("media types\n");
+    // The extension wins outright: it is the one unambiguous signal.
+    checkEq(podbox::classifyMediaType("book.m4b", ""),
+            podbox::kMediaAudiobook, "m4b is an audiobook");
+    checkEq(podbox::classifyMediaType("book.M4B", "Rock"),
+            podbox::kMediaAudiobook, "extension beats genre, case-insensitively");
+    // Genre is the fallback, since it is what publishers fill in.
+    checkEq(podbox::classifyMediaType("ep.mp3", "Podcast"),
+            podbox::kMediaPodcast, "podcast genre");
+    checkEq(podbox::classifyMediaType("ep.mp3", "podcasts"),
+            podbox::kMediaPodcast, "podcast genre, plural and lowercase");
+    checkEq(podbox::classifyMediaType("x.m4a", "Books & Spoken"),
+            podbox::kMediaAudiobook, "spoken-word genre is an audiobook");
+    // Everything else is music, including the empty case.
+    checkEq(podbox::classifyMediaType("song.mp3", "Rock"), podbox::kMediaAudio,
+            "ordinary music");
+    checkEq(podbox::classifyMediaType("song.flac", ""), podbox::kMediaAudio,
+            "no genre is music");
+    // A genre that merely mentions one of the words is not a match.
+    checkEq(podbox::classifyMediaType("song.mp3", "Podcast Rock"),
+            podbox::kMediaAudio, "partial genre match is not a podcast");
+}
+
 int main(int argc, char** argv) {
     // dedupe_test --fp a b ...   print and compare fingerprints directly
     if (argc > 2 && std::string(argv[1]) == "--fp") {
@@ -444,6 +470,7 @@ int main(int argc, char** argv) {
     testBucketBoundary();
     testPlaylistRemoval();
     testStore();
+    testMediaTypes();
 
     fs::path root, sample;
     if (argc > 1) {

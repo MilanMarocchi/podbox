@@ -623,6 +623,22 @@ const Library* App::shownLibrary() const {
     return library_ ? &*library_ : nullptr;
 }
 
+std::uint32_t App::viewMediaType() const {
+    switch (view_) {
+        case View::Music: return kMediaAudio;
+        case View::Podcasts: return kMediaPodcast;
+        case View::Audiobooks: return kMediaAudiobook;
+        default: return 0;
+    }
+}
+
+bool App::deviceHasMedia(std::uint32_t mediaType) const {
+    if (!library_) return false;
+    for (const Track& t : library_->tracks)
+        if (t.mediaType == mediaType) return true;
+    return false;
+}
+
 const std::unordered_map<std::uint32_t, int>* App::shownIndex() const {
     if (view_ == View::Library) return &hostIndexById_;
     return library_ ? &trackIndexById_ : nullptr;
@@ -745,7 +761,8 @@ void App::applyFinishedScan() {
 
 bool App::browserApplies() const {
     return browser_.visible &&
-           (view_ == View::Music || view_ == View::Library);
+           (view_ == View::Music || view_ == View::Library ||
+            view_ == View::Podcasts || view_ == View::Audiobooks);
 }
 
 namespace {
@@ -792,6 +809,15 @@ void App::rebuildVisible() {
         for (const std::uint32_t id : lib->playlists[playlistIndex_].trackIds) {
             if (auto it = index->find(id); it != index->end())
                 base.push_back(it->second);
+        }
+    } else if (const std::uint32_t want = viewMediaType()) {
+        // Music, Podcasts and Audiobooks are one list partitioned by media
+        // type. A track with no type set is music: that is what everything
+        // imported before PodBox started recording it will look like.
+        for (int i = 0; i < int(lib->tracks.size()); ++i) {
+            const std::uint32_t mt = lib->tracks[i].mediaType;
+            if (mt == want || (want == kMediaAudio && mt == 0))
+                base.push_back(i);
         }
     } else {
         base.resize(lib->tracks.size());

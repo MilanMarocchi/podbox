@@ -44,14 +44,21 @@ public:
 
 private:
     // Which source the main panel is showing. Library is the Mac-side
-    // collection; Music/Playlist are the connected iPod's.
-    enum class View { Device, Music, Playlist, Library };
+    // collection; the rest are the connected iPod's. Music, Podcasts and
+    // Audiobooks are the same track list partitioned by media type, the way
+    // iTunes split its source list.
+    enum class View { Device, Music, Playlist, Library, Podcasts, Audiobooks };
 
     void updateLibrary();
     // Point the main panel at a different source. Selection is per-source, so
     // switching always clears it — four copies of this used to drift apart.
     // `playlistIndex` is only meaningful for View::Playlist.
     void switchSource(View view, int playlistIndex = -1);
+    // The media type a view shows, or 0 for views that do not partition by it.
+    std::uint32_t viewMediaType() const;
+    // True when the device library holds anything of that media type, which is
+    // what decides whether the sidebar offers the row at all.
+    bool deviceHasMedia(std::uint32_t mediaType) const;
     // The tracks currently on screen, and their id index — the Mac library's
     // or the iPod's. Everything that merely displays tracks goes through
     // these so one table serves both. Null when nothing is loaded.

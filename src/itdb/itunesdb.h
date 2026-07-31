@@ -8,6 +8,14 @@
 
 namespace podbox {
 
+// Track::mediaType. The iPod files a track by this and plays it accordingly:
+// audiobooks are kept out of shuffle and resume where you left off. The values
+// are a bit field in the database, but a track carries exactly one.
+inline constexpr std::uint32_t kMediaAudio = 1;
+inline constexpr std::uint32_t kMediaVideo = 2;
+inline constexpr std::uint32_t kMediaPodcast = 4;
+inline constexpr std::uint32_t kMediaAudiobook = 8;
+
 struct Track {
     std::uint32_t id = 0;
     std::string title;
@@ -25,7 +33,7 @@ struct Track {
     std::uint32_t sampleRate = 0;
     std::uint32_t playCount = 0;
     std::uint8_t rating = 0;      // 0-100, 20 per star
-    std::uint32_t mediaType = 1;  // 1 audio, 2 video, 4 podcast, 8 audiobook
+    std::uint32_t mediaType = 1;  // see kMedia* below
     std::int64_t dateAdded = 0;   // unix time
     std::uint64_t dbid = 0;       // persistent id; generated when 0
 

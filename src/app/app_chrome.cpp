@@ -534,6 +534,14 @@ void App::drawSidebar(float height) {
             if (row("music", "Music", 28.0f, view_ == View::Music)) {
                 switchSource(View::Music);
             }
+            // Only offered when the device actually holds some: an empty
+            // Podcasts row is a dead end, and most iPods have none.
+            if (deviceHasMedia(kMediaPodcast) &&
+                row("podcasts", "Podcasts", 28.0f, view_ == View::Podcasts))
+                switchSource(View::Podcasts);
+            if (deviceHasMedia(kMediaAudiobook) &&
+                row("books", "Audiobooks", 28.0f, view_ == View::Audiobooks))
+                switchSource(View::Audiobooks);
         }
     } else {
         ImGui::SetCursorPosX(10);
@@ -611,8 +619,7 @@ void App::drawMainPanel(float height) {
     const bool trackView =
         view_ == View::Library
             ? true
-            : (dev && library_ &&
-               (view_ == View::Music || view_ == View::Playlist));
+            : (dev && library_ && view_ != View::Device);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                         trackView ? ImVec2(0, 0) : ImVec2(18, 14));
@@ -1293,9 +1300,8 @@ void App::drawStatusBar() {
         return;
     }
     const Library* shown = shownLibrary();
-    const bool onTracks = shown && (view_ == View::Library ||
-                                    ((view_ == View::Music ||
-                                      view_ == View::Playlist) && dev));
+    const bool onTracks =
+        shown && (view_ == View::Library || (dev && view_ != View::Device));
     if (onTracks) {
         std::uint64_t totalMs = 0, totalBytes = 0;
         for (const auto& [pos, ti] : visible_) {

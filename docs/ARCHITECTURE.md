@@ -64,9 +64,14 @@ writes, re-parses and compares field by field, reporting how much was
 preserved. Run it against a real database after touching anything in `itdb/`.
 
 **What is not modelled:** the hash58/hash72 checksums (the scheme is read from
-the header and writes are refused when one is required), media types beyond
-plain audio, artwork on the device, Soundcheck, and the on-the-go playlists in
-the `Play Counts` file.
+the header and writes are refused when one is required), artwork on the device,
+Soundcheck, podcast episode metadata, audiobook resume positions, and the
+on-the-go playlists in the `Play Counts` file.
+
+Media type *is* modelled — one `mediaType` field per track, set on import by
+`classifyMediaType` in `library/metadata.cpp` and used to split the source list
+into Music, Podcasts and Audiobooks. A track with no type set counts as music,
+because that is what everything written before PodBox recorded it looks like.
 
 ### `library/` — files and the Mac collection
 
@@ -129,10 +134,22 @@ and you get all of that for free — do not write the database any other way.
 
 ## `app/`
 
-`app.cpp` is the largest file in the project and holds the chrome, all eight
-modal sheets, playback, selection, and every mutation path.
+Four files, split by what each has a reason to change for:
 
-Two abstractions worth knowing before you read it:
+| File | Holds |
+|---|---|
+| `app.cpp` | lifecycle, the frame loop, library loading, every mutation path, selection, playback |
+| `app_chrome.cpp` | toolbar, transport, source list, column browser, track table, device pane, status bar |
+| `app_modals.cpp` | the eight sheets and the work each drives |
+| `app_util.{h,cpp}` | layout constants, and the drawing and text helpers the other three share |
+
+Most state lives in `App`, grouped into a struct per feature (`apple_`,
+`dupes_`, `getInfo_`, `syncUi_`, `plEdit_`, `art_`, `scan_`, `browser_`) so a
+dialog's state travels with the dialog. The track-view state — `view_`,
+`search_`, `sortCol_`, `selection_` — stays flat because nearly every function
+here reads it.
+
+Three abstractions worth knowing before you read any of it:
 
 - **`shownLibrary()` / `shownIndex()`** return either the iPod's library or a
   `Library`-shaped view of the Mac one, so a single track table, search, sort
@@ -143,6 +160,13 @@ Two abstractions worth knowing before you read it:
   function do the work; nothing else filters or sorts. The display position is
   load-bearing — shift-click ranges and playlist drag-reorder both index
   through it.
+- **The column browser reads a set upstream of the one it constrains.**
+  `rebuildVisible()` runs in stages: the source's rows, narrowed by search,
+  then the Genres/Artists/Albums facet lists, then the browser's own predicate,
+  then the sort. The facet lists come out of the search stage and the table out
+  of the predicate stage, so nothing reads what it writes. There is exactly one
+  dirty flag for all of it, deliberately: a second cache would have to be
+  invalidated at every one of `visibleDirty_`'s eighteen set-sites.
 
 ## `ui/`
 
