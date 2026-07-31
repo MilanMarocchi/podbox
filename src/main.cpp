@@ -1,4 +1,5 @@
 #include "app/app.h"
+#include "ui/macos_window.h"
 #include "ui/theme.h"
 
 #include <podbox_version.h>
@@ -32,6 +33,16 @@ int main() {
         glfwTerminate();
         return 1;
     }
+    // The toolbar runs to the top of the window, with the traffic lights
+    // over it — see ui/macos_window.h.
+    podbox::useUnifiedTitlebar(window);
+
+    // A floor, so the chrome cannot be squeezed into nonsense. Below this the
+    // LCD would start eating the volume slider and the sidebar would leave no
+    // usable room for the track table. Controls in the toolbar still drop out
+    // one at a time above it as things get tight.
+    glfwSetWindowSizeLimits(window, 900, 560, GLFW_DONT_CARE, GLFW_DONT_CARE);
+
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 
@@ -49,6 +60,7 @@ int main() {
     ImGui_ImplOpenGL3_Init("#version 150");
 
     podbox::App app(fonts);
+    app.setWindow(window);
     glfwSetWindowUserPointer(window, &app);
     glfwSetDropCallback(window, [](GLFWwindow* w, int count,
                                    const char** paths) {

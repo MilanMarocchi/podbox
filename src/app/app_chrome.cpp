@@ -10,6 +10,7 @@
 #include "library/artwork.h"
 #include "library/transcode.h"
 #include "ui/aqua.h"
+#include "ui/macos_window.h"
 #include "ui/theme.h"
 
 #include <imgui.h>
@@ -22,6 +23,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cfloat>
 #include <cstdio>
 #include <string>
@@ -85,67 +87,88 @@ void App::drawArtworkPane(float sidebarHeight) {
     dl->AddRect(p, ImVec2(p.x + box, p.y + box), pal::ArtworkBorder, 2.0f);
 }
 
-void App::drawTransport(float toolbarWidth) {
-    (void)toolbarWidth;
+void App::drawTransport() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float cy = kToolbarHeight * 0.5f;
     const PlaybackState st = player_ ? player_->state() : PlaybackState::Stopped;
     const bool haveList = library_ && !visible_.empty();
     const ImU32 glyph = haveList ? pal::Glyph : pal::GlyphDim;
-    constexpr float kPrevW = 26.0f, kPlayW = 30.0f, kNextW = 26.0f;
-    constexpr float kGap = 4.0f, kStartX = 16.0f;
-    float x = kStartX;
-    bool clicked = false;
 
-    // One bezelled capsule behind all three, the way the iTunes transport was
-    // drawn — separate flat glyphs read as a debug UI.
-    {
-        const ImVec2 wp = ImGui::GetWindowPos();
-        const float w = kPrevW + kPlayW + kNextW + kGap * 2.0f;
-        const ImVec2 a(wp.x + kStartX - 5.0f, wp.y + cy - 15.0f);
-        const ImVec2 b(a.x + w + 10.0f, wp.y + cy + 15.0f);
-        aqua::gradientRect(dl, a, b, pal::ControlTop,
-                           pal::ControlBottom, pal::ControlBorder,
-                           15.0f);
-        // Hairlines separating the three, as on the real control.
-        for (float sx : {kStartX + kPrevW + kGap * 0.5f,
-                         kStartX + kPrevW + kGap + kPlayW + kGap * 0.5f})
-            dl->AddLine(ImVec2(wp.x + sx, a.y + 5.0f),
-                        ImVec2(wp.x + sx, b.y - 5.0f),
-                        pal::ControlDivider);
-    }
+    // Three separate discs, not one capsule. iTunes drew each transport button
+    // as its own circle running white at the top to mid-grey at the bottom;
+    // a single pale capsule behind all three reads as a white slab sitting on
+    // the toolbar.
+    constexpr float kPrevR = 13.0f, kPlayR = 15.0f, kNextR = 13.0f;
+    constexpr float kGap = 5.0f;
+    float x = kTransportStartX;
 
-    auto button = [&](const char* id, float w) -> ImVec2 {
-        ImGui::SetCursorPos(ImVec2(x, cy - 13.0f));
-        ImGui::InvisibleButton(id, ImVec2(w, 26.0f));
-        clicked = ImGui::IsItemClicked();
+    auto disc = [&](const char* id, float r) -> ImVec2 {
+        ImGui::SetCursorPos(ImVec2(x, cy - r));
+        ImGui::InvisibleButton(id, ImVec2(r * 2.0f, r * 2.0f));
+        const bool hot = ImGui::IsItemHovered();
+        const bool held = ImGui::IsItemActive();
         const ImVec2 mn = ImGui::GetItemRectMin();
-        const ImVec2 mx = ImGui::GetItemRectMax();
-        x += w + kGap;
-        return ImVec2((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
+        const ImVec2 c(mn.x + r, mn.y + r);
+
+        // A vertical gradient inside a circle, done as horizontal slices: the
+        // draw list can fill a circle or gradient a rect, but not both.
+        constexpr int kSlices = 14;
+        for (int i = 0; i < kSlices; ++i) {
+            const float t0 = float(i) / kSlices, t1 = float(i + 1) / kSlices;
+            const float y0 = c.y - r + 2.0f * r * t0;
+            const float y1 = c.y - r + 2.0f * r * t1;
+            // Half-chord at the slice midpoint, so the fill follows the rim.
+            const float m = (t0 + t1) * 0.5f * 2.0f - 1.0f;
+            const float half = r * std::sqrt(std::max(0.0f, 1.0f - m * m));
+            const float k = held ? 0.72f : (hot ? 1.04f : 1.0f);
+            auto lerp = [&](int a, int b) {
+                return int(std::clamp((a + (b - a) * (t0 + t1) * 0.5f) * k,
+                                      0.0f, 255.0f));
+            };
+            dl->AddRectFilled(ImVec2(c.x - half, y0), ImVec2(c.x + half, y1),
+                              pal::rgb(lerp(253, 172), lerp(253, 173),
+                                       lerp(253, 174)));
+        }
+        dl->AddCircle(c, r, pal::ControlBorder, 32, 1.0f);
+        x += r * 2.0f + kGap;
+        return c;
     };
 
-    // Previous.
+    // A double triangle, pointing left or right: the rewind and fast-forward
+    // glyphs, which are two chevrons rather than a triangle against a bar.
+    // Two chevrons pointing `dir` (-1 left, +1 right), together spanning
+    // exactly [c.x - kW, c.x + kW] so the pair is centred on the disc. The
+    // apex leads; the flat edge trails.
+    auto doubleTriangle = [&](ImVec2 c, int dir) {
+        constexpr float kW = 5.5f, kHalfH = 5.0f;
+        for (int k = 0; k < 2; ++k) {
+            const float flat = c.x + float(dir) * (k * kW - kW);
+            const float apex = flat + float(dir) * kW;
+            dl->AddTriangleFilled(ImVec2(flat, c.y - kHalfH),
+                                  ImVec2(flat, c.y + kHalfH),
+                                  ImVec2(apex, c.y), glyph);
+        }
+    };
+
     {
-        const ImVec2 c = button("##prev", 26.0f);
-        dl->AddTriangleFilled(ImVec2(c.x + 3, c.y - 5), ImVec2(c.x + 3, c.y + 5),
-                              ImVec2(c.x - 3, c.y), glyph);
-        dl->AddRectFilled(ImVec2(c.x - 6, c.y - 5), ImVec2(c.x - 4, c.y + 5),
-                          glyph);
+        const ImVec2 c = disc("##prev", kPrevR);
+        const bool clicked = ImGui::IsItemClicked();
+        doubleTriangle(c, -1);
         if (clicked && haveList) playRelative(-1);
     }
-    // Play / pause.
     {
-        const ImVec2 c = button("##playpause", 30.0f);
+        const ImVec2 c = disc("##playpause", kPlayR);
+        const bool clicked = ImGui::IsItemClicked();
         if (st == PlaybackState::Playing) {
-            dl->AddRectFilled(ImVec2(c.x - 5, c.y - 6), ImVec2(c.x - 1, c.y + 6),
+            dl->AddRectFilled(ImVec2(c.x - 5, c.y - 6), ImVec2(c.x - 2, c.y + 6),
                               glyph);
-            dl->AddRectFilled(ImVec2(c.x + 1, c.y - 6), ImVec2(c.x + 5, c.y + 6),
+            dl->AddRectFilled(ImVec2(c.x + 2, c.y - 6), ImVec2(c.x + 5, c.y + 6),
                               glyph);
         } else {
-            dl->AddTriangleFilled(ImVec2(c.x - 5, c.y - 7),
-                                  ImVec2(c.x - 5, c.y + 7),
-                                  ImVec2(c.x + 6, c.y), glyph);
+            // Centred on the disc: 11 wide, so 5.5 either side.
+            dl->AddTriangleFilled(ImVec2(c.x - 5.5f, c.y - 7.0f),
+                                  ImVec2(c.x - 5.5f, c.y + 7.0f),
+                                  ImVec2(c.x + 5.5f, c.y), glyph);
         }
         if (clicked) {
             if (st == PlaybackState::Playing)
@@ -160,50 +183,60 @@ void App::drawTransport(float toolbarWidth) {
                 playTrackId(library_->tracks[visible_[0].second].id);
         }
     }
-    // Next.
     {
-        const ImVec2 c = button("##next", 26.0f);
-        dl->AddTriangleFilled(ImVec2(c.x - 3, c.y - 5), ImVec2(c.x - 3, c.y + 5),
-                              ImVec2(c.x + 3, c.y), glyph);
-        dl->AddRectFilled(ImVec2(c.x + 4, c.y - 5), ImVec2(c.x + 6, c.y + 5),
-                          glyph);
+        const ImVec2 c = disc("##next", kNextR);
+        const bool clicked = ImGui::IsItemClicked();
+        doubleTriangle(c, +1);
         if (clicked && haveList) playRelative(+1);
     }
 
-    // Volume slider, with a quiet speaker at one end and a loud one at the
-    // other the way iTunes 10 drew it. Widened to keep the travel unchanged
-    // now that both ends carry a glyph.
-    x += 10.0f;
+    // Volume: a quiet speaker, a recessed groove, a loud speaker. The groove
+    // is light where it is filled and dark beyond the knob, which is what
+    // makes it read as a slot cut into the toolbar rather than a line.
+    x += 12.0f;
     ImGui::SetCursorPos(ImVec2(x, cy - 8.0f));
-    ImGui::InvisibleButton("##volume", ImVec2(104.0f, 16.0f));
+    ImGui::InvisibleButton("##volume", ImVec2(112.0f, 16.0f));
     const ImVec2 vmn = ImGui::GetItemRectMin();
     const ImVec2 vmx = ImGui::GetItemRectMax();
     const float ty = (vmn.y + vmx.y) * 0.5f;
-    const float tx0 = vmn.x + 16.0f, tx1 = vmx.x - 20.0f;
-    auto speaker = [&](float sx) {
-        dl->AddRectFilled(ImVec2(sx, ty - 3), ImVec2(sx + 4, ty + 3),
+    const float tx0 = vmn.x + 15.0f, tx1 = vmx.x - 19.0f;
+
+    // A speaker: a small rectangular body with a cone opening toward `dir`,
+    // plus `waves` arcs for the loud end.
+    auto speaker = [&](float sx, int waves) {
+        dl->AddRectFilled(ImVec2(sx, ty - 2.5f), ImVec2(sx + 3.0f, ty + 2.5f),
                           pal::Glyph);
-        dl->AddTriangleFilled(ImVec2(sx + 4, ty - 5), ImVec2(sx + 4, ty + 5),
-                              ImVec2(sx + 9, ty), pal::Glyph);
+        // The cone flares away from the body: narrow where it meets the
+        // block, wide at the mouth. Tapering the other way draws an arrow.
+        dl->AddTriangleFilled(ImVec2(sx + 7.5f, ty - 5.5f),
+                              ImVec2(sx + 7.5f, ty + 5.5f),
+                              ImVec2(sx + 2.0f, ty), pal::Glyph);
+        for (int i = 0; i < waves; ++i) {
+            dl->PathArcTo(ImVec2(sx + 7.0f, ty), 3.0f + 2.8f * i, -0.95f, 0.95f,
+                          10);
+            dl->PathStroke(pal::Glyph, 0, 1.3f);
+        }
     };
-    speaker(vmn.x);
-    speaker(vmx.x - 16.0f);
-    // The two arcs that make the right-hand speaker the loud one.
-    for (float r : {4.0f, 6.5f}) {
-        dl->PathArcTo(ImVec2(vmx.x - 12.0f, ty), r, -1.05f, 1.05f, 12);
-        dl->PathStroke(pal::Glyph, 0, 1.2f);
-    }
+    speaker(vmn.x, 0);
+    speaker(vmx.x - 14.0f, 2);
+
     float vol = player_ ? player_->volume() : 0.0f;
     if (ImGui::IsItemActive()) {
         vol = std::clamp((ImGui::GetIO().MousePos.x - tx0) / (tx1 - tx0), 0.0f,
                          1.0f);
         if (player_) player_->setVolume(vol);
     }
-    dl->AddLine(ImVec2(tx0, ty), ImVec2(tx1, ty), pal::LcdProgressBg, 2.0f);
-    dl->AddLine(ImVec2(tx0, ty), ImVec2(tx0 + (tx1 - tx0) * vol, ty),
-                pal::LcdProgressFill, 2.0f);
-    dl->AddCircleFilled(ImVec2(tx0 + (tx1 - tx0) * vol, ty), 5.0f,
-                        pal::LcdProgressKnob);
+    const float knobX = tx0 + (tx1 - tx0) * vol;
+    const float gh = 3.5f;
+    dl->AddRectFilled(ImVec2(tx0, ty - gh), ImVec2(tx1, ty + gh),
+                      pal::VolumeEmpty, gh);
+    if (knobX > tx0 + 1.0f)
+        dl->AddRectFilled(ImVec2(tx0, ty - gh), ImVec2(knobX, ty + gh),
+                          pal::VolumeFilled, gh);
+    dl->AddRect(ImVec2(tx0, ty - gh), ImVec2(tx1, ty + gh), pal::ControlBorder,
+                gh);
+    dl->AddCircleFilled(ImVec2(knobX, ty), 6.0f, pal::ControlTop, 20);
+    dl->AddCircle(ImVec2(knobX, ty), 6.0f, pal::ControlBorder, 20, 1.0f);
 }
 
 void App::drawNowPlaying(ImVec2 a, ImVec2 b) {
@@ -276,10 +309,22 @@ void App::drawToolbar() {
     dl->AddLine(ImVec2(p.x, br.y - 0.5f), ImVec2(br.x, br.y - 0.5f),
                 pal::ToolbarBorder);
 
-    drawTransport(w);
+    // The toolbar is the title bar now, so there is nothing left to grab:
+    // dragging empty space in it moves the window. Submitted before the
+    // controls, so they take the mouse ahead of it.
+    ImGui::SetCursorPos(ImVec2(kTrafficLightWidth, 0.0f));
+    ImGui::InvisibleButton(
+        "##windowdrag",
+        ImVec2(std::max(1.0f, w - kTrafficLightWidth), kToolbarHeight));
+    if (ImGui::IsItemActive()) dragWindowWithCurrentEvent(window_);
 
-    // Centered "LCD" status display, like the old iTunes readout.
-    const float lcdW = std::min(kLcdWidth, w - 40.0f);
+    drawTransport();
+
+    // Centred readout, never wider than the gap the left cluster leaves on
+    // either side of centre — so it shrinks before it can collide rather than
+    // overlapping the volume slider.
+    const float lcdW =
+        std::min(kLcdWidth, w - 2.0f * kToolbarLeftEnd - 24.0f);
     if (lcdW > 80.0f) {
         const ImVec2 a(p.x + (w - lcdW) * 0.5f,
                        p.y + (kToolbarHeight - kLcdHeight) * 0.5f);
@@ -341,91 +386,37 @@ void App::drawToolbar() {
         }
     }
 
-    // View-mode segments, immediately left of the search field. Only the first
-    // is implemented; the others are drawn dim and drop their clicks.
-    constexpr float kSegW = 30.0f, kSegH = 22.0f, kSegs = 4;
-    const float segTotal = kSegW * kSegs;
-    const float segX = w - kSearchWidth - 16.0f - segTotal - 12.0f;
-    if (w > 1000.0f) {
-        const ImVec2 sa(p.x + segX, p.y + (kToolbarHeight - kSegH) * 0.5f);
-        const ImVec2 sb(sa.x + segTotal, sa.y + kSegH);
-        aqua::gradientRect(dl, sa, sb, pal::ControlTop, pal::ControlBottom,
-                           pal::ControlBorder, 4.0f);
-        // The active segment is the whole rounded capsule redrawn inset and
-        // clipped to one cell — which gives rounded outer corners and square
-        // inner edges without any per-corner flag bookkeeping.
-        dl->PushClipRect(sa, ImVec2(sa.x + kSegW, sb.y), true);
-        dl->AddRectFilledMultiColor(sa, sb, pal::ControlOnTop, pal::ControlOnTop,
-                                    pal::ControlOnBottom, pal::ControlOnBottom);
-        dl->AddRect(sa, sb, pal::ControlBorder, 4.0f);
-        dl->PopClipRect();
-        for (int i = 1; i < int(kSegs); ++i)
-            dl->AddLine(ImVec2(sa.x + kSegW * i, sa.y + 3.0f),
-                        ImVec2(sa.x + kSegW * i, sb.y - 3.0f),
-                        pal::ControlDivider);
+    // The right cluster is laid out from the right edge inward, so a missing
+    // search field does not leave the segments stranded in the middle. Each
+    // control drops out when there is no longer room for it, widest last.
+    float rightX = w - 16.0f;
 
-        for (int i = 0; i < int(kSegs); ++i) {
-            const float cx = sa.x + kSegW * i + kSegW * 0.5f;
-            const float cy2 = (sa.y + sb.y) * 0.5f;
-            const ImU32 g = i == 0 ? IM_COL32_WHITE : pal::GlyphDim;
-            switch (i) {
-                case 0:  // list
-                    for (int k = 0; k < 4; ++k)
-                        dl->AddLine(ImVec2(cx - 5, cy2 - 4.5f + k * 3),
-                                    ImVec2(cx + 5, cy2 - 4.5f + k * 3), g);
-                    break;
-                case 1:  // album list
-                    dl->AddRectFilled(ImVec2(cx - 6, cy2 - 3),
-                                      ImVec2(cx - 1, cy2 + 3), g);
-                    for (int k = 0; k < 3; ++k)
-                        dl->AddLine(ImVec2(cx + 1, cy2 - 3 + k * 3),
-                                    ImVec2(cx + 6, cy2 - 3 + k * 3), g);
-                    break;
-                case 2:  // grid
-                    for (int r = 0; r < 2; ++r)
-                        for (int c2 = 0; c2 < 2; ++c2)
-                            dl->AddRectFilled(
-                                ImVec2(cx - 5 + c2 * 6, cy2 - 5 + r * 6),
-                                ImVec2(cx - 1 + c2 * 6, cy2 - 1 + r * 6), g);
-                    break;
-                default:  // cover flow
-                    dl->AddRectFilled(ImVec2(cx - 3, cy2 - 4),
-                                      ImVec2(cx + 3, cy2 + 4), g);
-                    dl->AddRectFilled(ImVec2(cx - 7, cy2 - 3),
-                                      ImVec2(cx - 4, cy2 + 3),
-                                      pal::alpha(g, 120));
-                    dl->AddRectFilled(ImVec2(cx + 4, cy2 - 3),
-                                      ImVec2(cx + 7, cy2 + 3),
-                                      pal::alpha(g, 120));
-                    break;
-            }
-            // Real items so hover is real; 1-3 simply have no handler. Not
-            // BeginDisabled, which would kill hover — the dim glyph is the
-            // affordance.
-            ImGui::SetCursorPos(ImVec2(segX + kSegW * i,
-                                       (kToolbarHeight - kSegH) * 0.5f));
-            ImGui::PushID(i);
-            ImGui::InvisibleButton("##viewmode", ImVec2(kSegW, kSegH));
-            ImGui::PopID();
-        }
+    // Only one way of showing a track list exists, so there is no segmented
+    // view switcher: three of its four cells would be decoration. It comes
+    // back when Album List, Grid and Cover Flow do.
+    const bool anythingToSearch = library_ || !host_.tracks().empty();
+    const bool showSearch = anythingToSearch && rightX - kSearchWidth > 320.0f;
+    float searchX = 0.0f;
+    if (showSearch) {
+        rightX -= kSearchWidth;
+        searchX = rightX;
     }
 
-    // Search box, right-aligned like iTunes. Gated on whatever library is on
-    // screen rather than on the iPod's: in Library view with no device
-    // attached — the common case — it used to vanish entirely.
-    const Library* shown = shownLibrary();
-    if (shown && w > kLcdWidth + 2.0f * (kSearchWidth + 60.0f)) {
-        ImGui::SetCursorPos(
-            ImVec2(w - kSearchWidth - 16.0f, (kToolbarHeight - 23.0f) * 0.5f));
+    if (showSearch) {
+        ImGui::SetCursorPos(ImVec2(searchX, (kToolbarHeight - 23.0f) * 0.5f));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 11.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(24, 4));
         ImGui::SetNextItemWidth(kSearchWidth);
         const ImVec2 fp = ImGui::GetCursorScreenPos();
         if (ImGui::InputTextWithHint("##search", "Search", search_,
-                                     sizeof(search_)))
+                                     sizeof(search_))) {
             visibleDirty_ = true;
+            // Typing on the device pane has nothing to filter, so move to a
+            // list that does rather than swallowing the keystrokes.
+            if (view_ == View::Device)
+                switchSource(library_ ? View::Music : View::Library);
+        }
         ImGui::PopStyleVar(2);
-        // Magnifier, drawn into the field's left padding.
         const float gy = fp.y + ImGui::GetItemRectSize().y * 0.5f;
         dl->AddCircle(ImVec2(fp.x + 11.0f, gy - 1.0f), 3.5f, pal::Glyph, 12,
                       1.3f);
@@ -492,6 +483,20 @@ void App::drawSidebar(float height) {
 
     // The Mac's own collection, above the device — this is the library that
     // exists whether or not an iPod is plugged in.
+    // Offered from both the header glyph and the row's context menu, so the
+    // items live in one place rather than being written out twice.
+    auto libraryActions = [&] {
+        ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::Text));
+        ImGui::BeginDisabled(scan_.running);
+        if (ImGui::MenuItem(scan_.running ? "Scanning…" : "Rescan"))
+            rescanWatchFolders();
+        ImGui::EndDisabled();
+        if (ImGui::MenuItem("Music Folders…")) foldersOpen_ = true;
+        if (ImGui::MenuItem("Import from Apple Music…")) apple_.open = true;
+        ImGui::PopStyleColor();
+    };
+
+    const float libraryHeaderY = ImGui::GetCursorScreenPos().y + 6.0f;
     sectionHeader("LIBRARY");
     {
         const std::string label =
@@ -499,18 +504,37 @@ void App::drawSidebar(float height) {
         if (row("hostlib", label, 28.0f, view_ == View::Library)) {
             switchSource(View::Library);
         }
+        if (ImGui::BeginPopupContextItem("libctx")) {
+            libraryActions();
+            ImGui::EndPopup();
+        }
     }
-    ImGui::SetCursorPosX(10);
-    ImGui::PushFont(fonts_.label);
-    ImGui::BeginDisabled(scan_.running);
-    if (ImGui::SmallButton(scan_.running ? "Scanning…" : "Rescan"))
-        rescanWatchFolders();
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Folders…")) foldersOpen_ = true;
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Apple Music…")) apple_.open = true;
-    ImGui::PopFont();
+    // These three used to sit under the row as a line of buttons, which
+    // overflowed a 200px sidebar and wrapped into a mess. iTunes kept its
+    // source list to rows alone, so they live behind a menu on the section
+    // header now — reachable from the row's context menu too, since a bare
+    // glyph is not much of an advertisement.
+    {
+        // Drawn back up on the section header, so the cursor has to be put
+        // where it was afterwards — otherwise everything below this lays out
+        // from the header's line and DEVICES lands on top of the Music row.
+        const ImVec2 resume = ImGui::GetCursorScreenPos();
+        const ImVec2 gear(ImGui::GetWindowPos().x + kSidebarWidth - 26.0f,
+                          libraryHeaderY + 1.0f);
+        ImGui::SetCursorScreenPos(gear);
+        const bool open = ImGui::InvisibleButton("##libmenu", ImVec2(16, 14));
+        ImGui::SetCursorScreenPos(resume);
+        const ImU32 c =
+            ImGui::IsItemHovered() ? pal::GlyphHot : pal::SidebarHeader;
+        for (int i = 0; i < 3; ++i)
+            dl->AddCircleFilled(ImVec2(gear.x + 3.0f + i * 5.0f, gear.y + 7.0f),
+                                1.4f, c, 6);
+        if (open) ImGui::OpenPopup("libmenu");
+    }
+    if (ImGui::BeginPopup("libmenu")) {
+        libraryActions();
+        ImGui::EndPopup();
+    }
 
     sectionHeader("DEVICES");
     const auto& dev = watcher_.device();
@@ -663,7 +687,6 @@ void App::drawMainPanel(float height) {
 }
 
 void App::drawColumnBrowser(float width) {
-    ImDrawList* dl = ImGui::GetWindowDrawList();
     constexpr float kHeadH = 17.0f, kRowH = 17.0f;
 
     // Clamped every frame rather than only on drag, so shrinking the window
@@ -675,6 +698,11 @@ void App::drawColumnBrowser(float width) {
     ImGui::BeginChild("browser", ImVec2(width, browser_.height), false,
                       ImGuiWindowFlags_NoScrollbar);
 
+    // Taken after BeginChild on purpose. A child has its own draw list which
+    // is rendered over the parent's, so headers and dividers drawn into the
+    // parent's list end up underneath this child's background — which is
+    // exactly where the pane titles went missing.
+    ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float paneW = std::floor(width / 3.0f);
 
@@ -754,9 +782,13 @@ void App::drawColumnBrowser(float width) {
             const bool selected =
                 panes[i].sel->has_value() && **panes[i].sel == v;
             ImGui::PushID(k);
-            // A blank artist or genre is common in ripped music and is a real
-            // facet, so it gets a label rather than an empty row.
-            if (row(v.empty() ? "Unknown" : v, selected) && !selected) {
+            // A blank artist or genre is common in ripped music and is a
+            // real facet, so it gets a label rather than an empty row. Tags
+            // that are nothing but whitespace look identical to the reader
+            // and are treated the same way.
+            const bool blank =
+                v.find_first_not_of(" \t\r\n") == std::string::npos;
+            if (row(blank ? "Unknown" : v, selected) && !selected) {
                 *panes[i].sel = v;
                 visibleDirty_ = true;
             }
@@ -776,7 +808,9 @@ void App::drawColumnBrowser(float width) {
     ImGui::PopStyleColor();
 
     // Splitter. Session-lived: there is no UI settings file, and inventing one
-    // for a divider position is not worth it.
+    // for a divider position is not worth it. Back on the parent's draw list
+    // now that the child has been closed.
+    dl = ImGui::GetWindowDrawList();
     const ImVec2 sp = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##browser_split", ImVec2(width, 5.0f));
     if (ImGui::IsItemHovered() || ImGui::IsItemActive())
@@ -1218,76 +1252,89 @@ void App::drawStatusBar() {
     dl->AddLine(ImVec2(wp.x, y0 + 0.5f), ImVec2(wp.x + w, y0 + 0.5f),
                 pal::StatusBorder);
 
-    // The icon clusters iTunes 10 put at either end. All of them do something:
-    // nothing else in this app draws a control that does not.
+    // The icon clusters iTunes 10 put at either end. All of them do
+    // something: nothing else in this app draws a control that does not.
     const float iy = y0 + kStatusBarHeight * 0.5f;
     const float statusTop = ImGui::GetWindowHeight() - kStatusBarHeight;
     float ix = 8.0f;
-    // `hot` reports hover; the caller draws, so the glyph can react.
-    auto slot = [&](const char* id, bool enabled) {
+
+    // One status-bar icon: reserves its slot, reports the click, and hands
+    // back where to draw and in what colour, so each icon below is its glyph
+    // and nothing else.
+    struct Icon {
+        ImVec2 c;       // centre to draw around
+        ImU32 col;
+        bool clicked;
+    };
+    auto icon = [&](const char* id, bool enabled, bool on) -> Icon {
         ImGui::SetCursorPos(ImVec2(ix, statusTop + 4.0f));
         ImGui::PushID(id);
         ImGui::BeginDisabled(!enabled);
         const bool clicked = ImGui::InvisibleButton("##i", ImVec2(16, 16));
         ImGui::EndDisabled();
+        const bool hot = ImGui::IsItemHovered();
         ImGui::PopID();
+        const ImVec2 centre(wp.x + ix + 8.0f, iy);
         ix += 22.0f;
-        return clicked;
-    };
-    auto glyphCol = [](bool enabled, bool on) {
-        if (!enabled) return pal::GlyphDim;
-        if (on) return pal::GlyphOn;
-        return ImGui::IsItemHovered() ? pal::GlyphHot : pal::Glyph;
+        const ImU32 col = !enabled  ? pal::GlyphDim
+                          : on      ? pal::GlyphOn
+                          : hot     ? pal::GlyphHot
+                                    : pal::Glyph;
+        return {centre, col, clicked};
     };
 
-    // New playlist. Playlists live on the device, so nothing to add to without
-    // one we can write.
+    // New playlist. Playlists live on the device, so there is nothing to add
+    // to without one we can write.
     {
-        const float gx = wp.x + ix + 8.0f;
-        const bool on = library_ && writesSupported();
-        if (slot("newpl", on)) createPlaylist(0);
-        const ImU32 c = glyphCol(on, false);
-        dl->AddRectFilled(ImVec2(gx - 5, iy - 1), ImVec2(gx + 5, iy + 1), c);
-        dl->AddRectFilled(ImVec2(gx - 1, iy - 5), ImVec2(gx + 1, iy + 5), c);
+        const Icon i = icon("newpl", library_ && writesSupported(), false);
+        if (i.clicked) createPlaylist(0);
+        dl->AddRectFilled(ImVec2(i.c.x - 5, i.c.y - 1),
+                          ImVec2(i.c.x + 5, i.c.y + 1), i.col);
+        dl->AddRectFilled(ImVec2(i.c.x - 1, i.c.y - 5),
+                          ImVec2(i.c.x + 1, i.c.y + 5), i.col);
     }
     // Shuffle: two crossing arrows.
     {
-        const float gx = wp.x + ix + 8.0f;
-        if (slot("shuffle", true)) shuffle_ = !shuffle_;
-        const ImU32 c = glyphCol(true, shuffle_);
-        dl->AddLine(ImVec2(gx - 6, iy - 4), ImVec2(gx + 6, iy + 4), c, 1.4f);
-        dl->AddLine(ImVec2(gx - 6, iy + 4), ImVec2(gx + 6, iy - 4), c, 1.4f);
-        dl->AddTriangleFilled(ImVec2(gx + 3, iy - 6), ImVec2(gx + 7, iy - 4),
-                              ImVec2(gx + 3, iy - 2), c);
-        dl->AddTriangleFilled(ImVec2(gx + 3, iy + 2), ImVec2(gx + 7, iy + 4),
-                              ImVec2(gx + 3, iy + 6), c);
+        const Icon i = icon("shuffle", true, shuffle_);
+        if (i.clicked) shuffle_ = !shuffle_;
+        dl->AddLine(ImVec2(i.c.x - 6, i.c.y - 4), ImVec2(i.c.x + 6, i.c.y + 4),
+                    i.col, 1.4f);
+        dl->AddLine(ImVec2(i.c.x - 6, i.c.y + 4), ImVec2(i.c.x + 6, i.c.y - 4),
+                    i.col, 1.4f);
+        dl->AddTriangleFilled(ImVec2(i.c.x + 3, i.c.y - 6),
+                              ImVec2(i.c.x + 7, i.c.y - 4),
+                              ImVec2(i.c.x + 3, i.c.y - 2), i.col);
+        dl->AddTriangleFilled(ImVec2(i.c.x + 3, i.c.y + 2),
+                              ImVec2(i.c.x + 7, i.c.y + 4),
+                              ImVec2(i.c.x + 3, i.c.y + 6), i.col);
     }
     // Repeat: a loop, with a "1" when it repeats one track.
     {
-        const float gx = wp.x + ix + 8.0f;
-        if (slot("repeat", true))
-            repeat_ = repeat_ == Repeat::Off  ? Repeat::All
+        const Icon i = icon("repeat", true, repeat_ != Repeat::Off);
+        if (i.clicked)
+            repeat_ = repeat_ == Repeat::Off   ? Repeat::All
                       : repeat_ == Repeat::All ? Repeat::One
                                                : Repeat::Off;
-        const ImU32 c = glyphCol(true, repeat_ != Repeat::Off);
-        dl->AddRect(ImVec2(gx - 6, iy - 4), ImVec2(gx + 6, iy + 4), c, 3.0f, 0,
-                    1.4f);
-        dl->AddTriangleFilled(ImVec2(gx + 1, iy - 7), ImVec2(gx + 5, iy - 4),
-                              ImVec2(gx + 1, iy - 1), c);
+        dl->AddRect(ImVec2(i.c.x - 6, i.c.y - 4), ImVec2(i.c.x + 6, i.c.y + 4),
+                    i.col, 3.0f, 0, 1.4f);
+        dl->AddTriangleFilled(ImVec2(i.c.x + 1, i.c.y - 7),
+                              ImVec2(i.c.x + 5, i.c.y - 4),
+                              ImVec2(i.c.x + 1, i.c.y - 1), i.col);
         if (repeat_ == Repeat::One)
             dl->AddText(fonts_.label, fonts_.labelSize,
-                        ImVec2(gx - 2.0f, iy - 6.0f), c, "1");
+                        ImVec2(i.c.x - 2.0f, i.c.y - 6.0f), i.col, "1");
     }
-    // Show/hide the Now Playing artwork well in the sidebar.
+    // Show or hide the Now Playing artwork well in the sidebar.
     {
-        const float gx = wp.x + ix + 8.0f;
-        if (slot("artwork", true)) artworkPaneOpen_ = !artworkPaneOpen_;
-        const ImU32 c = glyphCol(true, artworkPaneOpen_);
-        dl->AddRect(ImVec2(gx - 6, iy - 6), ImVec2(gx + 6, iy + 6), c, 1.0f, 0,
-                    1.3f);
-        dl->AddLine(ImVec2(gx - 6, iy + 3), ImVec2(gx - 1, iy - 2), c, 1.3f);
-        dl->AddLine(ImVec2(gx - 1, iy - 2), ImVec2(gx + 6, iy + 5), c, 1.3f);
-        dl->AddCircleFilled(ImVec2(gx + 2.5f, iy - 3.0f), 1.6f, c, 8);
+        const Icon i = icon("artwork", true, artworkPaneOpen_);
+        if (i.clicked) artworkPaneOpen_ = !artworkPaneOpen_;
+        dl->AddRect(ImVec2(i.c.x - 6, i.c.y - 6), ImVec2(i.c.x + 6, i.c.y + 6),
+                    i.col, 1.0f, 0, 1.3f);
+        dl->AddLine(ImVec2(i.c.x - 6, i.c.y + 3), ImVec2(i.c.x - 1, i.c.y - 2),
+                    i.col, 1.3f);
+        dl->AddLine(ImVec2(i.c.x - 1, i.c.y - 2), ImVec2(i.c.x + 6, i.c.y + 5),
+                    i.col, 1.3f);
+        dl->AddCircleFilled(ImVec2(i.c.x + 2.5f, i.c.y - 3.0f), 1.6f, i.col, 8);
     }
     const float leftEdge = ix;
 

@@ -122,10 +122,12 @@ target_link_libraries(podbox_core PUBLIC tag)
 
 if(APPLE)
   set(PODBOX_AUDIO_SRC src/audio/player_avf.mm)
-  set_source_files_properties(src/audio/player_avf.mm PROPERTIES
-    COMPILE_FLAGS "-fobjc-arc")
+  set(PODBOX_PLATFORM_SRC src/ui/macos_window.mm)
+  set_source_files_properties(src/audio/player_avf.mm src/ui/macos_window.mm
+    PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 else()
   set(PODBOX_AUDIO_SRC src/audio/player_null.cpp)
+  set(PODBOX_PLATFORM_SRC src/ui/macos_window_stub.cpp)
 endif()
 
 # On macOS this builds PodBox.app rather than a bare binary: a bundle is what
@@ -143,6 +145,7 @@ add_executable(podbox MACOSX_BUNDLE
   src/ui/aqua.cpp
   src/ui/theme.cpp
   ${PODBOX_AUDIO_SRC}
+  ${PODBOX_PLATFORM_SRC}
   $<$<BOOL:${APPLE}>:${PODBOX_ICON}>)
 target_link_libraries(podbox PRIVATE podbox_core imgui_lib)
 if(NOT MSVC)
@@ -165,7 +168,7 @@ endif()
 
 if(APPLE)
   target_link_libraries(podbox PRIVATE
-    "-framework AVFoundation" "-framework Foundation")
+    "-framework AVFoundation" "-framework Foundation" "-framework Cocoa")
 endif()
 
 add_executable(itdb_dump tools/itdb_dump.cpp)

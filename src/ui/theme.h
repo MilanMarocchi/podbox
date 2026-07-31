@@ -35,31 +35,35 @@ inline constexpr ImU32 Warning = rgb(160, 60, 20);
 inline constexpr ImU32 Danger = rgb(160, 40, 40);
 inline constexpr ImU32 Success = rgb(20, 110, 30);
 
-inline constexpr ImU32 ToolbarTop = rgb(246, 246, 246);
-inline constexpr ImU32 ToolbarBottom = rgb(214, 214, 214);
+inline constexpr ImU32 ToolbarTop = rgb(229, 229, 229);
+inline constexpr ImU32 ToolbarBottom = rgb(163, 166, 169);
 inline constexpr ImU32 ToolbarBorder = rgb(148, 148, 148);
 
 // The centre readout. iTunes 10's is flat and faintly green, with none of
 // the glossy top wash the earlier versions had.
-inline constexpr ImU32 LcdBg = rgb(226, 231, 222);
-inline constexpr ImU32 LcdBgTop = rgb(232, 236, 228);
-inline constexpr ImU32 LcdBgBottom = rgb(216, 222, 212);
-inline constexpr ImU32 LcdBorder = rgb(142, 148, 138);
-inline constexpr ImU32 LcdText = rgb(38, 44, 38);
-inline constexpr ImU32 LcdTextDim = rgb(96, 104, 94);
-inline constexpr ImU32 LcdProgressBg = rgb(190, 196, 186);
+inline constexpr ImU32 LcdBg = rgb(238, 241, 220);
+inline constexpr ImU32 LcdBgTop = rgb(234, 237, 216);
+inline constexpr ImU32 LcdBgBottom = rgb(245, 248, 225);
+inline constexpr ImU32 LcdBorder = rgb(171, 176, 158);
+inline constexpr ImU32 LcdText = rgb(42, 46, 34);
+inline constexpr ImU32 LcdTextDim = rgb(94, 100, 82);
+inline constexpr ImU32 LcdProgressBg = rgb(184, 189, 168);
 inline constexpr ImU32 LcdProgressFill = rgb(74, 124, 208);
 inline constexpr ImU32 LcdProgressKnob = rgb(60, 104, 186);
 
 // Generic light control face: the transport capsule, aqua::button, the
 // view-mode segments.
 inline constexpr ImU32 ControlTop = rgb(253, 253, 253);
-inline constexpr ImU32 ControlBottom = rgb(226, 226, 228);
-inline constexpr ImU32 ControlBorder = rgb(154, 156, 160);
+inline constexpr ImU32 ControlBottom = rgb(172, 173, 174);
+inline constexpr ImU32 ControlBorder = rgb(176, 178, 179);
 inline constexpr ImU32 ControlDivider = rgb(196, 199, 203);
 inline constexpr ImU32 ControlOnTop = rgb(150, 156, 164);  // pressed: inset
 inline constexpr ImU32 ControlOnBottom = rgb(190, 195, 202);
 inline constexpr ImU32 ControlHotBottom = rgb(236, 236, 238);
+// The volume groove: light where it is filled, dark where it is not, the way
+// a recessed track catches the light.
+inline constexpr ImU32 VolumeFilled = rgb(211, 212, 213);
+inline constexpr ImU32 VolumeEmpty = rgb(113, 113, 113);
 inline constexpr ImU32 DefaultBtnTop = rgb(126, 174, 235);
 inline constexpr ImU32 DefaultBtnBottom = rgb(56, 116, 205);
 inline constexpr ImU32 DefaultBtnBorder = rgb(52, 100, 170);

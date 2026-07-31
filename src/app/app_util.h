@@ -21,6 +21,16 @@ inline constexpr float kSidebarWidth = 200.0f;
 // before the eject button rather than running under it.
 inline constexpr float kSidebarRightMargin = 34.0f;
 inline constexpr float kToolbarHeight = 56.0f;
+// The window has no separate title bar: the toolbar runs to the top of the
+// window and macOS draws its close/minimise/zoom buttons over the left of it,
+// the way iTunes did. Everything in the toolbar starts clear of them.
+inline constexpr float kTrafficLightWidth = 78.0f;
+inline constexpr float kTransportStartX = kTrafficLightWidth + 8.0f;
+// Where the toolbar's left cluster ends: traffic lights, the three transport
+// discs and the volume slider. The LCD may not encroach on it.
+inline constexpr float kToolbarLeftEnd = kTransportStartX + 26.0f + 5.0f +
+                                         30.0f + 5.0f + 26.0f + 12.0f + 112.0f +
+                                         16.0f;
 inline constexpr float kStatusBarHeight = 24.0f;
 inline constexpr float kLcdWidth = 360.0f;
 inline constexpr float kLcdHeight = 40.0f;

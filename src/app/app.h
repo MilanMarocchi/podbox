@@ -22,6 +22,8 @@
 #include <utility>
 #include <vector>
 
+struct GLFWwindow;
+
 namespace podbox {
 
 class App {
@@ -34,6 +36,10 @@ public:
 
     // Draws one frame of the UI. Call between ImGui NewFrame/Render.
     void frame();
+
+    // The window, so dragging the toolbar can move it. The toolbar occupies
+    // the title bar, so there is nothing else left to grab.
+    void setWindow(GLFWwindow* w) { window_ = w; }
 
     // Files/folders dropped onto the window (from the GLFW drop callback).
     void onFilesDropped(const std::vector<std::string>& paths);
@@ -138,7 +144,7 @@ private:
     void updatePlayback();
     void playTrackId(std::uint32_t trackId);
     void playRelative(int delta);
-    void drawTransport(float toolbarWidth);
+    void drawTransport();
     void drawNowPlaying(ImVec2 lcdMin, ImVec2 lcdMax);
     void drawToolbar();
     void drawSidebar(float height);
@@ -149,6 +155,7 @@ private:
     void drawStatusBar();
 
     Fonts fonts_;
+    GLFWwindow* window_ = nullptr;
     DeviceWatcher watcher_;
 
     std::optional<Library> library_;
