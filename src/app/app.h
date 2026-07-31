@@ -151,6 +151,7 @@ private:
     void drawMainPanel(float height);
     void drawDeviceView(const IpodInfo& dev);
     void drawTrackTable();
+    void handleTrackTableKeys();
     void drawCapacityBar(const IpodInfo& dev);
     void drawStatusBar();
 

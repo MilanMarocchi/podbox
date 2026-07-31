@@ -95,6 +95,14 @@ void drawIpodIcon(ImDrawList* dl, ImVec2 p) {
                   pal::ControlBorder);
 }
 
+void drawEjectGlyph(ImDrawList* dl, ImVec2 c, ImU32 col) {
+    dl->AddTriangleFilled(ImVec2(c.x - 5.0f, c.y + 1.0f),
+                          ImVec2(c.x + 5.0f, c.y + 1.0f),
+                          ImVec2(c.x, c.y - 5.0f), col);
+    dl->AddRectFilled(ImVec2(c.x - 5.0f, c.y + 3.0f),
+                      ImVec2(c.x + 5.0f, c.y + 6.0f), col);
+}
+
 bool containsCi(const std::string& haystack, const std::string& lowerNeedle) {
     if (lowerNeedle.empty()) return true;
     return toLower(haystack).find(lowerNeedle) != std::string::npos;

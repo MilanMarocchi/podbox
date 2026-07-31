@@ -26,11 +26,21 @@ inline constexpr float kToolbarHeight = 56.0f;
 // the way iTunes did. Everything in the toolbar starts clear of them.
 inline constexpr float kTrafficLightWidth = 78.0f;
 inline constexpr float kTransportStartX = kTrafficLightWidth + 8.0f;
-// Where the toolbar's left cluster ends: traffic lights, the three transport
-// discs and the volume slider. The LCD may not encroach on it.
-inline constexpr float kToolbarLeftEnd = kTransportStartX + 26.0f + 5.0f +
-                                         30.0f + 5.0f + 26.0f + 12.0f + 112.0f +
-                                         16.0f;
+// Transport geometry, kept here rather than inside drawTransport because the
+// LCD needs to know where the left cluster ends. Spelling the total out as
+// magic numbers in two places is how the two quietly stop agreeing.
+inline constexpr float kPrevRadius = 13.0f;
+inline constexpr float kPlayRadius = 15.0f;
+inline constexpr float kNextRadius = 13.0f;
+inline constexpr float kTransportGap = 5.0f;
+inline constexpr float kVolumeGap = 12.0f;
+inline constexpr float kVolumeWidth = 112.0f;
+
+// Where the toolbar's left cluster ends: traffic lights, the three discs and
+// the volume slider, plus a margin. The LCD may not encroach on it.
+inline constexpr float kToolbarLeftEnd =
+    kTransportStartX + 2.0f * (kPrevRadius + kPlayRadius + kNextRadius) +
+    2.0f * kTransportGap + kVolumeGap + kVolumeWidth + 16.0f;
 inline constexpr float kStatusBarHeight = 24.0f;
 inline constexpr float kLcdWidth = 360.0f;
 inline constexpr float kLcdHeight = 40.0f;
@@ -67,6 +77,10 @@ int drawStars(ImDrawList* dl, ImVec2 p, std::uint8_t rating, bool hovered,
 
 // Small iPod glyph drawn with primitives, iTunes-sidebar style.
 void drawIpodIcon(ImDrawList* dl, ImVec2 p);
+
+// The eject symbol — a triangle over a bar — centred on `c`. Drawn in both
+// the source list and the status bar, which had their own copies.
+void drawEjectGlyph(ImDrawList* dl, ImVec2 c, ImU32 col);
 
 // --- text ------------------------------------------------------------------
 

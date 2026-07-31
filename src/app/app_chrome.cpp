@@ -98,8 +98,6 @@ void App::drawTransport() {
     // as its own circle running white at the top to mid-grey at the bottom;
     // a single pale capsule behind all three reads as a white slab sitting on
     // the toolbar.
-    constexpr float kPrevR = 13.0f, kPlayR = 15.0f, kNextR = 13.0f;
-    constexpr float kGap = 5.0f;
     float x = kTransportStartX;
 
     auto disc = [&](const char* id, float r) -> ImVec2 {
@@ -130,7 +128,7 @@ void App::drawTransport() {
                                        lerp(253, 174)));
         }
         dl->AddCircle(c, r, pal::ControlBorder, 32, 1.0f);
-        x += r * 2.0f + kGap;
+        x += r * 2.0f + kTransportGap;
         return c;
     };
 
@@ -151,13 +149,13 @@ void App::drawTransport() {
     };
 
     {
-        const ImVec2 c = disc("##prev", kPrevR);
+        const ImVec2 c = disc("##prev", kPrevRadius);
         const bool clicked = ImGui::IsItemClicked();
         doubleTriangle(c, -1);
         if (clicked && haveList) playRelative(-1);
     }
     {
-        const ImVec2 c = disc("##playpause", kPlayR);
+        const ImVec2 c = disc("##playpause", kPlayRadius);
         const bool clicked = ImGui::IsItemClicked();
         if (st == PlaybackState::Playing) {
             dl->AddRectFilled(ImVec2(c.x - 5, c.y - 6), ImVec2(c.x - 2, c.y + 6),
@@ -184,7 +182,7 @@ void App::drawTransport() {
         }
     }
     {
-        const ImVec2 c = disc("##next", kNextR);
+        const ImVec2 c = disc("##next", kNextRadius);
         const bool clicked = ImGui::IsItemClicked();
         doubleTriangle(c, +1);
         if (clicked && haveList) playRelative(+1);
@@ -193,9 +191,9 @@ void App::drawTransport() {
     // Volume: a quiet speaker, a recessed groove, a loud speaker. The groove
     // is light where it is filled and dark beyond the knob, which is what
     // makes it read as a slot cut into the toolbar rather than a line.
-    x += 12.0f;
+    x += kVolumeGap;
     ImGui::SetCursorPos(ImVec2(x, cy - 8.0f));
-    ImGui::InvisibleButton("##volume", ImVec2(112.0f, 16.0f));
+    ImGui::InvisibleButton("##volume", ImVec2(kVolumeWidth, 16.0f));
     const ImVec2 vmn = ImGui::GetItemRectMin();
     const ImVec2 vmx = ImGui::GetItemRectMax();
     const float ty = (vmn.y + vmx.y) * 0.5f;
@@ -555,10 +553,7 @@ void App::drawSidebar(float height) {
                                 ? pal::GlyphOn
                                 : (devSelected ? IM_COL32_WHITE
                                                : pal::Glyph);
-        dl->AddTriangleFilled(ImVec2(ejx, ejy + 6), ImVec2(ejx + 10, ejy + 6),
-                              ImVec2(ejx + 5, ejy), ejCol);
-        dl->AddRectFilled(ImVec2(ejx, ejy + 8), ImVec2(ejx + 10, ejy + 11),
-                          ejCol);
+        drawEjectGlyph(dl, ImVec2(ejx + 5.0f, ejy + 5.0f), ejCol);
         ImGui::SetCursorScreenPos(afterRow);
         drawIpodIcon(dl, ImVec2(iconPos.x + 10, iconPos.y + 1));
         if (library_) {
@@ -1173,46 +1168,52 @@ void App::drawTrackTable() {
         }
     }
 
-    if (!selection_.empty() && !ImGui::GetIO().WantTextInput &&
-        (ImGui::GetIO().KeySuper || ImGui::GetIO().KeyCtrl) &&
-        ImGui::IsKeyPressed(ImGuiKey_I))
-        openGetInfo();
+    handleTrackTableKeys();
+}
 
-    if (selectedTrackId_ && !deleteRequestId_ &&
-        !ImGui::GetIO().WantTextInput &&
-        (ImGui::IsKeyPressed(ImGuiKey_Delete) ||
-         ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
-        // In a playlist, plain Delete removes from the playlist; the
-        // "Remove from iPod" path stays in the context menu to avoid
-        // accidental file deletion.
-        if (!viewingHost() && !writesSupported()) {
-            setStatus(
-                "This iPod needs a hashed database — writes not yet supported");
-        } else if (view_ == View::Playlist && playlistIndex_ >= 0) {
-            auto& ids = library_->playlists[playlistIndex_].trackIds;
-            int removed = 0;
-            for (std::uint32_t id : selection_) {
-                if (auto it = std::find(ids.begin(), ids.end(), id);
-                    it != ids.end()) {
-                    ids.erase(it);
-                    ++removed;
-                }
+// Cmd+I and Delete for the track table. Kept apart from the drawing
+// because it is the one part of it that is not drawing.
+void App::handleTrackTableKeys() {
+if (!selection_.empty() && !ImGui::GetIO().WantTextInput &&
+    (ImGui::GetIO().KeySuper || ImGui::GetIO().KeyCtrl) &&
+    ImGui::IsKeyPressed(ImGuiKey_I))
+    openGetInfo();
+
+if (selectedTrackId_ && !deleteRequestId_ &&
+    !ImGui::GetIO().WantTextInput &&
+    (ImGui::IsKeyPressed(ImGuiKey_Delete) ||
+     ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
+    // In a playlist, plain Delete removes from the playlist; the
+    // "Remove from iPod" path stays in the context menu to avoid
+    // accidental file deletion.
+    if (!viewingHost() && !writesSupported()) {
+        setStatus(
+            "This iPod needs a hashed database — writes not yet supported");
+    } else if (view_ == View::Playlist && playlistIndex_ >= 0) {
+        auto& ids = library_->playlists[playlistIndex_].trackIds;
+        int removed = 0;
+        for (std::uint32_t id : selection_) {
+            if (auto it = std::find(ids.begin(), ids.end(), id);
+                it != ids.end()) {
+                ids.erase(it);
+                ++removed;
             }
-            if (removed > 0) {
-                visibleDirty_ = true;
-                if (writeDatabase())
-                    setStatus("Removed " + plural(removed, "song", "songs") +
-                              " from the playlist");
-            }
-        } else if (viewingHost()) {
-            // Deleting from the Mac library would mean deleting the user's
-            // own files out of a folder PodBox only indexes. Not this key's
-            // job, and not something to do by accident.
-            setStatus("Delete removes songs from the iPod, not from your Mac");
-        } else {
-            deleteRequestId_ = selectedTrackId_;
         }
+        if (removed > 0) {
+            visibleDirty_ = true;
+            if (writeDatabase())
+                setStatus("Removed " + plural(removed, "song", "songs") +
+                          " from the playlist");
+        }
+    } else if (viewingHost()) {
+        // Deleting from the Mac library would mean deleting the user's
+        // own files out of a folder PodBox only indexes. Not this key's
+        // job, and not something to do by accident.
+        setStatus("Delete removes songs from the iPod, not from your Mac");
+    } else {
+        deleteRequestId_ = selectedTrackId_;
     }
+}
 }
 
 void App::drawCapacityBar(const IpodInfo& dev) {
@@ -1348,9 +1349,7 @@ void App::drawStatusBar() {
             ejectRequested_ = true;
         const ImU32 c = ImGui::IsItemHovered() ? pal::GlyphHot : pal::Glyph;
         const float gx = wp.x + rightEdge + 8.0f;
-        dl->AddTriangleFilled(ImVec2(gx - 5, iy + 1), ImVec2(gx + 5, iy + 1),
-                              ImVec2(gx, iy - 5), c);
-        dl->AddRectFilled(ImVec2(gx - 5, iy + 3), ImVec2(gx + 5, iy + 6), c);
+        drawEjectGlyph(dl, ImVec2(gx, iy), c);
     }
 
     // Whatever is left between the two clusters belongs to the label.
