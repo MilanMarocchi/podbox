@@ -191,9 +191,11 @@ inspected and repaired by hand.
 
 - `library.tsv` — `podbox-library 1`, then one `W` row per watch folder and one
   `T` row per track, tab-separated with escaping. Written atomically via
-  temp-and-rename. **It has no version field beyond the magic, and rows with
-  too few columns are silently dropped** — so adding a column breaks old files
-  quietly. Fix that properly if you extend it.
+  temp-and-rename. Rows are read positionally against a minimum column count:
+  columns past it are read when present and defaulted when absent, so the
+  format can gain a column without making every older file unreadable. If you
+  add one, append it — never reorder, and never raise `kMinTrackFields`, which
+  is what makes an older file load rather than silently count as zero tracks.
 - `PodBoxFingerprints` — `podbox-fingerprints 1`, keyed by `Track::dbid`. Lives
   on the device so it travels with it.
 
