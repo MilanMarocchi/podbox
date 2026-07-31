@@ -144,14 +144,19 @@ private:
     // merge.
     bool playCountsUnmatched_ = false;
     bool hostLoaded_ = false;
+
     // A rescan runs on a worker over its own copy of the library and is
     // swapped in when it finishes, so a cold scan of a large folder never
     // blocks the frame loop.
-    std::thread scanThread_;
-    std::atomic<bool> scanFinished_{false};
-    std::unique_ptr<HostLibrary> scanResult_;
-    ScanStats scanStats_;
-    bool hostScanning_ = false;
+    struct HostScan {
+        std::thread thread;
+        std::atomic<bool> finished{false};
+        std::unique_ptr<HostLibrary> result;
+        ScanStats stats;
+        bool running = false;
+    };
+    HostScan scan_;
+
     std::string libraryError_;
     std::filesystem::path loadedMount_;
     std::unordered_map<std::uint32_t, int> trackIndexById_;
@@ -190,61 +195,81 @@ private:
     bool restoreOpen_ = false;
     bool foldersOpen_ = false;
 
+    // Get Info. Editing many tracks at once leaves any field the user does
+    // not touch alone, which is why a blank field means "leave alone" rather
+    // than "clear".
+    struct GetInfoEdit {
+        bool open = false;
+        char title[256] = {};
+        char artist[256] = {};
+        char album[256] = {};
+        char genre[128] = {};
+        char year[8] = {};
+        char track[8] = {};
+        bool writeTags = false;
+    };
+    GetInfoEdit getInfo_;
+
+    // Sync review. The plan is recomputed only when something that affects it
+    // changes, never per frame.
+    struct SyncReview {
+        bool open = false;
+        bool dirty = false;
+        SyncOptions options;
+        SyncPlan plan;
+        bool confirmRemove = false;
+    };
+    SyncReview syncUi_;
+
     // Apple Music import. The read and the copy both run on a worker: the
     // read takes seconds, the copy can move gigabytes.
-    // Sync review. The plan is recomputed only when something that affects
-    // it changes, never per frame.
-    // Get Info. Editing many tracks at once leaves any field the user does
-    // not touch alone, which is why the "mixed" markers matter.
-    bool getInfoOpen_ = false;
-    char giTitle_[256] = {};
-    char giArtist_[256] = {};
-    char giAlbum_[256] = {};
-    char giGenre_[128] = {};
-    char giYear_[8] = {};
-    char giTrack_[8] = {};
-    bool giWriteTags_ = false;
-
-    bool syncOpen_ = false;
-    bool syncDirty_ = false;
-    SyncOptions syncOptions_;
-    SyncPlan syncPlan_;
-    bool syncConfirmRemove_ = false;
-
-    bool appleMusicOpen_ = false;
-    std::thread appleThread_;
-    std::atomic<bool> appleFinished_{false};
-    std::atomic<bool> appleCancel_{false};
-    std::atomic<int> appleDone_{0};
-    std::atomic<int> appleTotal_{0};
-    bool appleBusy_ = false;
-    bool appleCopying_ = false;
-    AppleMusicRead appleRead_;
-    CopyResult appleCopy_;
-    std::string appleCurrent_;
-    std::mutex appleMutex_;
+    struct AppleMusicImport {
+        bool open = false;
+        std::thread thread;
+        std::atomic<bool> finished{false};
+        std::atomic<bool> cancel{false};
+        std::atomic<int> done{0};
+        std::atomic<int> total{0};
+        bool busy = false;
+        bool copying = false;
+        AppleMusicRead read;
+        CopyResult copy;
+        std::string current;
+        std::mutex mutex;
+    };
+    AppleMusicImport apple_;
 
     // Duplicate review. Groups are recomputed only when something that
     // affects them changes, not every frame.
-    bool duplicatesOpen_ = false;
-    bool duplicatesDirty_ = false;
-    MatchMode duplicateMode_ = MatchMode::Exact;
-    bool duplicatesIdenticalOnly_ = false;
-    std::vector<DuplicateGroup> duplicateGroups_;
-    std::vector<char> duplicateEnabled_;  // per group; char to stay indexable
-    VerifyJob verify_;
+    struct DuplicateReview {
+        bool open = false;
+        bool dirty = false;
+        MatchMode mode = MatchMode::Exact;
+        bool identicalOnly = false;
+        std::vector<DuplicateGroup> groups;
+        std::vector<char> enabled;  // per group; char to stay indexable
+        VerifyJob verify;
+    };
+    DuplicateReview dupes_;
 
     // Playlist editing.
-    int renamePlaylistIndex_ = -1;   // -1 = not renaming
-    int deletePlaylistIndex_ = -2;   // -2 = no request pending
-    char renameBuf_[128] = {};
-    bool renameJustOpened_ = false;
+    struct PlaylistEdit {
+        int renameIndex = -1;  // -1 = not renaming
+        int deleteIndex = -2;  // -2 = no request pending
+        char buf[128] = {};
+        bool justOpened = false;
+    };
+    PlaylistEdit plEdit_;
 
     // Artwork preview for the selected track. The GL texture is created
     // lazily and refreshed only when the selection changes.
-    unsigned int artTexture_ = 0;
-    std::uint32_t artTrackId_ = 0;
-    bool artHasImage_ = false;
+    struct ArtworkPreview {
+        unsigned int texture = 0;
+        std::uint32_t trackId = 0;
+        bool hasImage = false;
+    };
+    ArtworkPreview art_;
+
     bool ejectRequested_ = false;
 
     // Playback.

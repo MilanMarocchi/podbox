@@ -34,13 +34,13 @@ void App::updateArtwork() {
     const Library* shown = shownLibrary();
     const auto* index = shownIndex();
     if (!shown || !index || selectedTrackId_ == 0) {
-        artHasImage_ = false;
-        artTrackId_ = 0;
+        art_.hasImage = false;
+        art_.trackId = 0;
         return;
     }
-    if (selectedTrackId_ == artTrackId_) return;  // already current
-    artTrackId_ = selectedTrackId_;
-    artHasImage_ = false;
+    if (selectedTrackId_ == art_.trackId) return;  // already current
+    art_.trackId = selectedTrackId_;
+    art_.hasImage = false;
 
     const auto it = index->find(selectedTrackId_);
     if (it == index->end()) return;
@@ -48,8 +48,8 @@ void App::updateArtwork() {
     const ArtImage img = loadEmbeddedArtwork(file);
     if (!img.ok()) return;
 
-    if (artTexture_ == 0) glGenTextures(1, &artTexture_);
-    glBindTexture(GL_TEXTURE_2D, artTexture_);
+    if (art_.texture == 0) glGenTextures(1, &art_.texture);
+    glBindTexture(GL_TEXTURE_2D, art_.texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -57,7 +57,7 @@ void App::updateArtwork() {
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0, GL_RGBA,
                  GL_UNSIGNED_BYTE, img.rgba.data());
-    artHasImage_ = true;
+    art_.hasImage = true;
 }
 
 void App::drawArtworkPane(float sidebarHeight) {
@@ -72,8 +72,8 @@ void App::drawArtworkPane(float sidebarHeight) {
     const ImVec2 p(wp.x + (kSidebarWidth - box) * 0.5f, top + 14.0f);
     dl->AddRectFilled(p, ImVec2(p.x + box, p.y + box), pal::rgb(255, 255, 255),
                       2.0f);
-    if (artHasImage_ && artTexture_) {
-        dl->AddImage((ImTextureID)(intptr_t)artTexture_, p,
+    if (art_.hasImage && art_.texture) {
+        dl->AddImage((ImTextureID)(intptr_t)art_.texture, p,
                      ImVec2(p.x + box, p.y + box));
     } else {
         // Empty "no artwork" well, like iTunes' placeholder note glyph.
@@ -403,14 +403,14 @@ void App::drawSidebar(float height) {
     }
     ImGui::SetCursorPosX(10);
     ImGui::PushFont(fonts_.label);
-    ImGui::BeginDisabled(hostScanning_);
-    if (ImGui::SmallButton(hostScanning_ ? "Scanning…" : "Rescan"))
+    ImGui::BeginDisabled(scan_.running);
+    if (ImGui::SmallButton(scan_.running ? "Scanning…" : "Rescan"))
         rescanWatchFolders();
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (ImGui::SmallButton("Folders…")) foldersOpen_ = true;
     ImGui::SameLine();
-    if (ImGui::SmallButton("Apple Music…")) appleMusicOpen_ = true;
+    if (ImGui::SmallButton("Apple Music…")) apple_.open = true;
     ImGui::PopFont();
 
     sectionHeader("DEVICES");
@@ -455,24 +455,24 @@ void App::drawSidebar(float height) {
         for (int i = 0; i < int(library_->playlists.size()); ++i) {
             const bool selected =
                 view_ == View::Playlist && playlistIndex_ == i;
-            if (renamePlaylistIndex_ == i) {
+            if (plEdit_.renameIndex == i) {
                 // Inline rename field.
                 ImGui::SetCursorPosX(18);
                 ImGui::SetNextItemWidth(kSidebarWidth - 26.0f);
-                if (renameJustOpened_) {
+                if (plEdit_.justOpened) {
                     ImGui::SetKeyboardFocusHere();
-                    renameJustOpened_ = false;
+                    plEdit_.justOpened = false;
                 }
                 const bool done = ImGui::InputText(
-                    "##rename", renameBuf_, sizeof(renameBuf_),
+                    "##rename", plEdit_.buf, sizeof(plEdit_.buf),
                     ImGuiInputTextFlags_EnterReturnsTrue |
                         ImGuiInputTextFlags_AutoSelectAll);
                 if (done || ImGui::IsItemDeactivated()) {
-                    if (renameBuf_[0]) {
-                        library_->playlists[i].name = renameBuf_;
+                    if (plEdit_.buf[0]) {
+                        library_->playlists[i].name = plEdit_.buf;
                         writeDatabase();
                     }
-                    renamePlaylistIndex_ = -1;
+                    plEdit_.renameIndex = -1;
                 }
                 continue;
             }
@@ -485,12 +485,12 @@ void App::drawSidebar(float height) {
                 ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::rgb(30, 30, 30)));
                 ImGui::BeginDisabled(!writesSupported());
                 if (ImGui::MenuItem("Rename")) {
-                    renamePlaylistIndex_ = i;
-                    renameJustOpened_ = true;
-                    std::snprintf(renameBuf_, sizeof(renameBuf_), "%s",
+                    plEdit_.renameIndex = i;
+                    plEdit_.justOpened = true;
+                    std::snprintf(plEdit_.buf, sizeof(plEdit_.buf), "%s",
                                   library_->playlists[i].name.c_str());
                 }
-                if (ImGui::MenuItem("Delete")) deletePlaylistIndex_ = i;
+                if (ImGui::MenuItem("Delete")) plEdit_.deleteIndex = i;
                 ImGui::EndDisabled();
                 ImGui::PopStyleColor();
                 ImGui::EndPopup();
@@ -628,9 +628,9 @@ void App::drawDeviceView(const IpodInfo& dev) {
     ImGui::BeginDisabled(host_.tracks().empty() || sync_.busy() ||
                          !writesSupported());
     if (ImGui::Button("Sync Library to iPod…")) {
-        syncOpen_ = true;
-        syncDirty_ = true;
-        syncConfirmRemove_ = false;
+        syncUi_.open = true;
+        syncUi_.dirty = true;
+        syncUi_.confirmRemove = false;
     }
     ImGui::EndDisabled();
     ImGui::PushFont(fonts_.label);
@@ -653,8 +653,8 @@ void App::drawDeviceView(const IpodInfo& dev) {
         library_ && !library_->tracks.empty() && writesSupported();
     ImGui::BeginDisabled(!canScan);
     if (ImGui::Button("Find Duplicates…")) {
-        duplicatesOpen_ = true;
-        duplicatesDirty_ = true;
+        dupes_.open = true;
+        dupes_.dirty = true;
     }
     ImGui::EndDisabled();
 

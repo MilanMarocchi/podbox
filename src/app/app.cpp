@@ -40,9 +40,9 @@ namespace fs = std::filesystem;
 namespace podbox {
 
 App::~App() {
-    appleCancel_.store(true);
-    if (scanThread_.joinable()) scanThread_.join();
-    if (appleThread_.joinable()) appleThread_.join();
+    apple_.cancel.store(true);
+    if (scan_.thread.joinable()) scan_.thread.join();
+    if (apple_.thread.joinable()) apple_.thread.join();
 }
 
 void App::frame() {
@@ -407,9 +407,9 @@ void App::createPlaylist(std::uint32_t withTrackId) {
     view_ = View::Playlist;
     visibleDirty_ = true;
     // Open inline rename on the fresh playlist.
-    renamePlaylistIndex_ = playlistIndex_;
-    renameJustOpened_ = true;
-    std::snprintf(renameBuf_, sizeof(renameBuf_), "%s",
+    plEdit_.renameIndex = playlistIndex_;
+    plEdit_.justOpened = true;
+    std::snprintf(plEdit_.buf, sizeof(plEdit_.buf), "%s",
                   library_->playlists[playlistIndex_].name.c_str());
     if (writeDatabase()) setStatus("Created playlist");
 }
@@ -588,7 +588,7 @@ void App::updateLibrary() {
     switchSource(library_ ? View::Music : View::Device);
     // A new device means the cached artwork texture describes a track that no
     // longer exists; only this path needs to say so.
-    artTrackId_ = 0;
+    art_.trackId = 0;
 }
 
 void App::switchSource(View view, int playlistIndex) {
@@ -685,34 +685,34 @@ void App::pullPlayCountsToHost() {
 }
 
 void App::rescanWatchFolders() {
-    if (hostScanning_) return;
-    if (scanThread_.joinable()) scanThread_.join();
+    if (scan_.running) return;
+    if (scan_.thread.joinable()) scan_.thread.join();
 
     // The worker gets its own copy so the UI can keep reading the live
     // library while a cold scan (which reads and hashes every file) runs.
-    hostScanning_ = true;
-    scanFinished_.store(false);
-    scanResult_ = std::make_unique<HostLibrary>(host_);
-    scanThread_ = std::thread([this] {
-        scanStats_ = scanResult_->rescan();
-        scanResult_->save();
-        scanFinished_.store(true);
+    scan_.running = true;
+    scan_.finished.store(false);
+    scan_.result = std::make_unique<HostLibrary>(host_);
+    scan_.thread = std::thread([this] {
+        scan_.stats = scan_.result->rescan();
+        scan_.result->save();
+        scan_.finished.store(true);
     });
     setStatus("Scanning your music folders…");
 }
 
 void App::applyFinishedScan() {
-    if (!scanFinished_.load()) return;
-    scanFinished_.store(false);
-    if (scanThread_.joinable()) scanThread_.join();
-    hostScanning_ = false;
-    if (!scanResult_) return;
+    if (!scan_.finished.load()) return;
+    scan_.finished.store(false);
+    if (scan_.thread.joinable()) scan_.thread.join();
+    scan_.running = false;
+    if (!scan_.result) return;
 
-    host_ = std::move(*scanResult_);
-    scanResult_.reset();
+    host_ = std::move(*scan_.result);
+    scan_.result.reset();
     rebuildHostView();
 
-    const ScanStats& s = scanStats_;
+    const ScanStats& s = scan_.stats;
     if (s.added || s.updated || s.missing) {
         std::string msg = "Library: " + plural(s.added, "song", "songs") +
                           " added";

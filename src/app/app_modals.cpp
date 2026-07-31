@@ -188,64 +188,64 @@ void App::drawFoldersModal() {
 }
 
 void App::startAppleMusicRead() {
-    if (appleBusy_) return;
-    if (appleThread_.joinable()) appleThread_.join();
-    appleBusy_ = true;
-    appleCopying_ = false;
-    appleFinished_.store(false);
-    appleCancel_.store(false);
-    appleThread_ = std::thread([this] {
+    if (apple_.busy) return;
+    if (apple_.thread.joinable()) apple_.thread.join();
+    apple_.busy = true;
+    apple_.copying = false;
+    apple_.finished.store(false);
+    apple_.cancel.store(false);
+    apple_.thread = std::thread([this] {
         AppleMusicRead r = readAppleMusicLibrary();
         {
-            std::lock_guard<std::mutex> lock(appleMutex_);
-            appleRead_ = std::move(r);
+            std::lock_guard<std::mutex> lock(apple_.mutex);
+            apple_.read = std::move(r);
         }
-        appleFinished_.store(true);
+        apple_.finished.store(true);
     });
 }
 
 void App::startAppleMusicCopy() {
-    if (appleBusy_ || appleRead_.tracks.empty()) return;
-    if (appleThread_.joinable()) appleThread_.join();
-    appleBusy_ = true;
-    appleCopying_ = true;
-    appleFinished_.store(false);
-    appleCancel_.store(false);
-    appleDone_.store(0);
-    appleTotal_.store(int(appleRead_.tracks.size()));
+    if (apple_.busy || apple_.read.tracks.empty()) return;
+    if (apple_.thread.joinable()) apple_.thread.join();
+    apple_.busy = true;
+    apple_.copying = true;
+    apple_.finished.store(false);
+    apple_.cancel.store(false);
+    apple_.done.store(0);
+    apple_.total.store(int(apple_.read.tracks.size()));
 
-    appleThread_ = std::thread([this] {
+    apple_.thread = std::thread([this] {
         CopyResult res = copyAppleMusicFiles(
-            appleRead_.tracks, appleMusicCopyRoot(),
+            apple_.read.tracks, appleMusicCopyRoot(),
             [this](int done, int total, const std::string& name) {
-                appleDone_.store(done);
-                appleTotal_.store(total);
+                apple_.done.store(done);
+                apple_.total.store(total);
                 {
-                    std::lock_guard<std::mutex> lock(appleMutex_);
-                    appleCurrent_ = name;
+                    std::lock_guard<std::mutex> lock(apple_.mutex);
+                    apple_.current = name;
                 }
-                return !appleCancel_.load();
+                return !apple_.cancel.load();
             });
         {
-            std::lock_guard<std::mutex> lock(appleMutex_);
-            appleCopy_ = res;
+            std::lock_guard<std::mutex> lock(apple_.mutex);
+            apple_.copy = res;
         }
-        appleFinished_.store(true);
+        apple_.finished.store(true);
     });
 }
 
 void App::applyFinishedAppleMusic() {
-    if (!appleFinished_.load()) return;
-    appleFinished_.store(false);
-    if (appleThread_.joinable()) appleThread_.join();
-    appleBusy_ = false;
-    if (!appleCopying_) return;  // a read just finished; the sheet shows it
+    if (!apple_.finished.load()) return;
+    apple_.finished.store(false);
+    if (apple_.thread.joinable()) apple_.thread.join();
+    apple_.busy = false;
+    if (!apple_.copying) return;  // a read just finished; the sheet shows it
 
-    appleCopying_ = false;
+    apple_.copying = false;
     // Fold the copies into the library. Matching on the destination path
     // means re-running an import updates play counts instead of duplicating.
     int added = 0;
-    for (const AppleMusicTrack& t : appleRead_.tracks) {
+    for (const AppleMusicTrack& t : apple_.read.tracks) {
         if (t.file.empty()) continue;
         std::error_code ec;
         if (!fs::exists(t.file, ec)) continue;  // cancelled before this one
@@ -257,12 +257,12 @@ void App::applyFinishedAppleMusic() {
 
     setStatus("Imported " + plural(added, "song", "songs") +
               " from Apple Music" +
-              (appleCopy_.cancelled ? " (stopped early)" : ""));
+              (apple_.copy.cancelled ? " (stopped early)" : ""));
 }
 
 void App::drawAppleMusicModal() {
     applyFinishedAppleMusic();
-    if (!appleMusicOpen_) return;
+    if (!apple_.open) return;
     if (!ImGui::IsPopupOpen("Import from Apple Music"))
         ImGui::OpenPopup("Import from Apple Music");
     if (!aqua::beginSheet("Import from Apple Music", 540.0f)) return;
@@ -274,12 +274,12 @@ void App::drawAppleMusicModal() {
                appleMusicCopyRoot().c_str());
     aqua::divider();
 
-    if (appleBusy_ && appleCopying_) {
-        const int done = appleDone_.load(), total = appleTotal_.load();
+    if (apple_.busy && apple_.copying) {
+        const int done = apple_.done.load(), total = apple_.total.load();
         std::string current;
         {
-            std::lock_guard<std::mutex> lock(appleMutex_);
-            current = appleCurrent_;
+            std::lock_guard<std::mutex> lock(apple_.mutex);
+            current = apple_.current;
         }
         ImGui::Text("Copying %d of %d", done, total);
         ImGui::ProgressBar(total > 0 ? float(done) / float(total) : 0.0f,
@@ -287,37 +287,37 @@ void App::drawAppleMusicModal() {
         aqua::body(fonts_, "%.60s", current.c_str());
         ImGui::Spacing();
         aqua::rightAlignButtons(1, 92.0f);
-        if (aqua::button("Stop", ImVec2(92, 0))) appleCancel_.store(true);
+        if (aqua::button("Stop", ImVec2(92, 0))) apple_.cancel.store(true);
         aqua::body(fonts_, "Stopping keeps everything copied so far.");
         aqua::endSheet();
         return;
     }
 
-    if (appleBusy_) {
+    if (apple_.busy) {
         ImGui::TextUnformatted("Reading your Apple Music library…");
         aqua::endSheet();
         return;
     }
 
-    if (!appleRead_.ok && appleRead_.error.empty()) {
+    if (!apple_.read.ok && apple_.read.error.empty()) {
         if (aqua::button("Read Apple Music Library", ImVec2(200, 0), true))
             startAppleMusicRead();
         ImGui::SameLine();
         if (aqua::button("Cancel", ImVec2(92, 0))) {
-            appleMusicOpen_ = false;
+            apple_.open = false;
             ImGui::CloseCurrentPopup();
         }
         aqua::endSheet();
         return;
     }
 
-    if (!appleRead_.error.empty()) {
+    if (!apple_.read.error.empty()) {
         ImGui::TextColored(v4(pal::rgb(160, 40, 40)), "%s",
-                           appleRead_.error.c_str());
+                           apple_.read.error.c_str());
         ImGui::Spacing();
         aqua::rightAlignButtons(2, 92.0f);
         if (aqua::button("Close", ImVec2(92, 0))) {
-            appleMusicOpen_ = false;
+            apple_.open = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -327,31 +327,31 @@ void App::drawAppleMusicModal() {
     }
 
     std::uint64_t bytes = 0;
-    for (const AppleMusicTrack& t : appleRead_.tracks)
+    for (const AppleMusicTrack& t : apple_.read.tracks)
         bytes += t.meta.sizeBytes;
     ImGui::Text("%s to copy · %s",
-                plural(int(appleRead_.tracks.size()), "song", "songs").c_str(),
+                plural(int(apple_.read.tracks.size()), "song", "songs").c_str(),
                 formatBytes(bytes).c_str());
 
     // Anything Apple Music lists but cannot hand over is reported rather than
     // quietly dropped.
-    if (appleRead_.streamingOnly)
+    if (apple_.read.streamingOnly)
         aqua::body(fonts_, "%d skipped — streaming only, no file on this Mac",
-                   appleRead_.streamingOnly);
-    if (appleRead_.fileMissing)
+                   apple_.read.streamingOnly);
+    if (apple_.read.fileMissing)
         aqua::body(fonts_, "%d skipped — file listed but not on disk",
-                   appleRead_.fileMissing);
-    if (appleRead_.drmProtected)
+                   apple_.read.fileMissing);
+    if (apple_.read.drmProtected)
         aqua::body(fonts_,
                    "%d skipped — DRM protected, an iPod cannot play these",
-                   appleRead_.drmProtected);
+                   apple_.read.drmProtected);
 
     aqua::divider();
     if (aqua::button("Re-read", ImVec2(92, 0))) startAppleMusicRead();
     ImGui::SameLine();
     aqua::rightAlignButtons(2, 100.0f);
     if (aqua::button("Cancel", ImVec2(100, 0))) {
-        appleMusicOpen_ = false;
+        apple_.open = false;
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -391,24 +391,24 @@ void App::openGetInfo() {
         std::snprintf(buf, n, "%s", same ? v.c_str() : "");
     };
     // A title is per-song by nature, so editing many at once never prefills it.
-    put(giTitle_, sizeof(giTitle_), first->title,
+    put(getInfo_.title, sizeof(getInfo_.title), first->title,
         sameTitle && selection_.size() == 1);
-    put(giArtist_, sizeof(giArtist_), first->artist, sameArtist);
-    put(giAlbum_, sizeof(giAlbum_), first->album, sameAlbum);
-    put(giGenre_, sizeof(giGenre_), first->genre, sameGenre);
-    std::snprintf(giYear_, sizeof(giYear_), "%s",
+    put(getInfo_.artist, sizeof(getInfo_.artist), first->artist, sameArtist);
+    put(getInfo_.album, sizeof(getInfo_.album), first->album, sameAlbum);
+    put(getInfo_.genre, sizeof(getInfo_.genre), first->genre, sameGenre);
+    std::snprintf(getInfo_.year, sizeof(getInfo_.year), "%s",
                   sameYear && first->year ? std::to_string(first->year).c_str()
                                           : "");
-    std::snprintf(giTrack_, sizeof(giTrack_), "%s",
+    std::snprintf(getInfo_.track, sizeof(getInfo_.track), "%s",
                   sameTrack && first->trackNumber
                       ? std::to_string(first->trackNumber).c_str()
                       : "");
-    giWriteTags_ = false;
-    getInfoOpen_ = true;
+    getInfo_.writeTags = false;
+    getInfo_.open = true;
 }
 
 void App::drawGetInfoModal() {
-    if (!getInfoOpen_) return;
+    if (!getInfo_.open) return;
     if (!ImGui::IsPopupOpen("Get Info")) ImGui::OpenPopup("Get Info");
     if (!aqua::beginSheet("Get Info", 520.0f)) return;
 
@@ -423,21 +423,21 @@ void App::drawGetInfoModal() {
     aqua::divider();
 
     ImGui::PushItemWidth(-130);
-    if (n == 1) ImGui::InputText("Name", giTitle_, sizeof(giTitle_));
-    ImGui::InputText("Artist", giArtist_, sizeof(giArtist_));
-    ImGui::InputText("Album", giAlbum_, sizeof(giAlbum_));
-    ImGui::InputText("Genre", giGenre_, sizeof(giGenre_));
-    ImGui::InputText("Year", giYear_, sizeof(giYear_),
+    if (n == 1) ImGui::InputText("Name", getInfo_.title, sizeof(getInfo_.title));
+    ImGui::InputText("Artist", getInfo_.artist, sizeof(getInfo_.artist));
+    ImGui::InputText("Album", getInfo_.album, sizeof(getInfo_.album));
+    ImGui::InputText("Genre", getInfo_.genre, sizeof(getInfo_.genre));
+    ImGui::InputText("Year", getInfo_.year, sizeof(getInfo_.year),
                      ImGuiInputTextFlags_CharsDecimal);
     if (n == 1)
-        ImGui::InputText("Track number", giTrack_, sizeof(giTrack_),
+        ImGui::InputText("Track number", getInfo_.track, sizeof(getInfo_.track),
                          ImGuiInputTextFlags_CharsDecimal);
     ImGui::PopItemWidth();
 
     ImGui::Spacing();
     if (viewingHost()) {
-        ImGui::Checkbox("Also write these tags into the files", &giWriteTags_);
-        aqua::body(fonts_, giWriteTags_
+        ImGui::Checkbox("Also write these tags into the files", &getInfo_.writeTags);
+        aqua::body(fonts_, getInfo_.writeTags
                                ? "This rewrites your own files on disk."
                                : "Off: only PodBox's library is changed.");
     } else {
@@ -449,7 +449,7 @@ void App::drawGetInfoModal() {
     aqua::divider();
     aqua::rightAlignButtons(2, 92.0f);
     if (aqua::button("Cancel", ImVec2(92, 0))) {
-        getInfoOpen_ = false;
+        getInfo_.open = false;
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -465,15 +465,15 @@ void App::drawGetInfoModal() {
                 for (HostTrack& cand : host_.tracks())
                     if (std::uint32_t(cand.id) == id) h = &cand;
                 if (!h) continue;
-                assign(h->meta.title, giTitle_);
-                assign(h->meta.artist, giArtist_);
-                assign(h->meta.album, giAlbum_);
-                assign(h->meta.genre, giGenre_);
-                if (giYear_[0]) h->meta.year = std::uint32_t(std::atoi(giYear_));
-                if (giTrack_[0])
-                    h->meta.trackNumber = std::uint32_t(std::atoi(giTrack_));
+                assign(h->meta.title, getInfo_.title);
+                assign(h->meta.artist, getInfo_.artist);
+                assign(h->meta.album, getInfo_.album);
+                assign(h->meta.genre, getInfo_.genre);
+                if (getInfo_.year[0]) h->meta.year = std::uint32_t(std::atoi(getInfo_.year));
+                if (getInfo_.track[0])
+                    h->meta.trackNumber = std::uint32_t(std::atoi(getInfo_.track));
                 ++changed;
-                if (giWriteTags_) {
+                if (getInfo_.writeTags) {
                     std::string err;
                     if (!writeFileTags(h->file, h->meta, &err)) ++tagFailures;
                 }
@@ -482,13 +482,13 @@ void App::drawGetInfoModal() {
                 const auto it = index->find(id);
                 if (it == index->end()) continue;
                 Track& t = library_->tracks[it->second];
-                assign(t.title, giTitle_);
-                assign(t.artist, giArtist_);
-                assign(t.album, giAlbum_);
-                assign(t.genre, giGenre_);
-                if (giYear_[0]) t.year = std::uint32_t(std::atoi(giYear_));
-                if (giTrack_[0])
-                    t.trackNumber = std::uint32_t(std::atoi(giTrack_));
+                assign(t.title, getInfo_.title);
+                assign(t.artist, getInfo_.artist);
+                assign(t.album, getInfo_.album);
+                assign(t.genre, getInfo_.genre);
+                if (getInfo_.year[0]) t.year = std::uint32_t(std::atoi(getInfo_.year));
+                if (getInfo_.track[0])
+                    t.trackNumber = std::uint32_t(std::atoi(getInfo_.track));
                 ++changed;
             }
         }
@@ -500,7 +500,7 @@ void App::drawGetInfoModal() {
             writeDatabase();
         }
         visibleDirty_ = true;
-        getInfoOpen_ = false;
+        getInfo_.open = false;
         ImGui::CloseCurrentPopup();
 
         std::string msg = "Updated " + plural(changed, "song", "songs");
@@ -512,18 +512,18 @@ void App::drawGetInfoModal() {
 }
 
 void App::refreshSyncPlan() {
-    syncDirty_ = false;
-    syncPlan_ = {};
+    syncUi_.dirty = false;
+    syncUi_.plan = {};
     if (!library_) return;
-    syncPlan_ = planSync(host_, *library_, fingerprints_, syncOptions_);
+    syncUi_.plan = planSync(host_, *library_, fingerprints_, syncUi_.options);
 }
 
 void App::startSync() {
-    if (!library_ || syncPlan_.toCopy.empty()) return;
+    if (!library_ || syncUi_.plan.toCopy.empty()) return;
 
     // Removals first, so space is freed before anything is copied in.
-    if (!syncPlan_.toRemove.empty()) {
-        const int removed = performDeleteMany(syncPlan_.toRemove);
+    if (!syncUi_.plan.toRemove.empty()) {
+        const int removed = performDeleteMany(syncUi_.plan.toRemove);
         setStatus("Removed " + plural(removed, "song", "songs") +
                   " not in your library");
     }
@@ -532,8 +532,8 @@ void App::startSync() {
     // same duplicate guard. The guard also protects against a plan that has
     // gone stale since it was computed.
     std::vector<fs::path> files;
-    files.reserve(syncPlan_.toCopy.size());
-    for (std::uint64_t id : syncPlan_.toCopy) {
+    files.reserve(syncUi_.plan.toCopy.size());
+    for (std::uint64_t id : syncUi_.plan.toCopy) {
         for (const HostTrack& h : host_.tracks()) {
             if (h.id != id) continue;
             files.push_back(h.file);
@@ -557,16 +557,16 @@ void App::startSync() {
 }
 
 void App::drawSyncModal() {
-    if (!syncOpen_) return;
+    if (!syncUi_.open) return;
     if (!ImGui::IsPopupOpen("Sync to iPod")) ImGui::OpenPopup("Sync to iPod");
     if (!aqua::beginSheet("Sync to iPod", 560.0f)) return;
     if (!library_) {
-        syncOpen_ = false;
+        syncUi_.open = false;
         ImGui::CloseCurrentPopup();
         aqua::endSheet();
         return;
     }
-    if (syncDirty_) refreshSyncPlan();
+    if (syncUi_.dirty) refreshSyncPlan();
 
     aqua::heading(fonts_, "Sync your library to this iPod");
     aqua::body(fonts_,
@@ -575,41 +575,41 @@ void App::drawSyncModal() {
     aqua::divider();
 
     ImGui::Text("%s to copy · %s",
-                plural(int(syncPlan_.toCopy.size()), "song", "songs").c_str(),
-                formatBytes(syncPlan_.bytesToCopy).c_str());
+                plural(int(syncUi_.plan.toCopy.size()), "song", "songs").c_str(),
+                formatBytes(syncUi_.plan.bytesToCopy).c_str());
     aqua::body(fonts_,
                "%d already on the iPod · %d duplicates skipped · %d "
                "missing from your Mac",
-               syncPlan_.alreadyOnDevice, syncPlan_.skippedDuplicate,
-               syncPlan_.skippedMissing);
+               syncUi_.plan.alreadyOnDevice, syncUi_.plan.skippedDuplicate,
+               syncUi_.plan.skippedMissing);
     aqua::body(fonts_,
                "FLAC and other lossless files are converted to 16-bit Apple "
                "Lossless so the iPod can play them.");
 
     ImGui::Spacing();
     if (ImGui::Checkbox("Also remove songs that aren't in my library",
-                        &syncOptions_.removeFromDevice)) {
-        syncDirty_ = true;
-        syncConfirmRemove_ = false;
+                        &syncUi_.options.removeFromDevice)) {
+        syncUi_.dirty = true;
+        syncUi_.confirmRemove = false;
     }
-    if (syncOptions_.removeFromDevice) {
+    if (syncUi_.options.removeFromDevice) {
         ImGui::TextColored(v4(pal::rgb(160, 60, 20)),
                            "This deletes %s from the iPod, freeing %s.",
-                           plural(int(syncPlan_.toRemove.size()), "song",
+                           plural(int(syncUi_.plan.toRemove.size()), "song",
                                   "songs")
                                .c_str(),
-                           formatBytes(syncPlan_.bytesToFree).c_str());
+                           formatBytes(syncUi_.plan.bytesToFree).c_str());
         // Every song queued for removal is one the Mac has no copy of, so
         // this is the only step in a sync that destroys music outright.
-        if (syncPlan_.deviceOnly > 0)
+        if (syncUi_.plan.deviceOnly > 0)
             ImGui::TextColored(v4(pal::rgb(170, 30, 30)),
                                "%s exist only on the iPod — deleting them "
                                "loses them for good.",
-                               plural(syncPlan_.deviceOnly, "song", "songs")
+                               plural(syncUi_.plan.deviceOnly, "song", "songs")
                                    .c_str());
-        if (!syncPlan_.toRemove.empty())
+        if (!syncUi_.plan.toRemove.empty())
             ImGui::Checkbox("Yes, delete those songs from the iPod",
-                            &syncConfirmRemove_);
+                            &syncUi_.confirmRemove);
     }
 
     // Capacity guard: refuse a plan that cannot fit rather than filling the
@@ -618,8 +618,8 @@ void App::drawSyncModal() {
     bool fits = true;
     if (dev && dev->freeBytes > 0) {
         const std::uint64_t after =
-            syncPlan_.bytesToCopy > syncPlan_.bytesToFree
-                ? syncPlan_.bytesToCopy - syncPlan_.bytesToFree
+            syncUi_.plan.bytesToCopy > syncUi_.plan.bytesToFree
+                ? syncUi_.plan.bytesToCopy - syncUi_.plan.bytesToFree
                 : 0;
         fits = after <= dev->freeBytes;
         if (!fits)
@@ -629,47 +629,47 @@ void App::drawSyncModal() {
     }
 
     const bool blockedByRemoval =
-        syncOptions_.removeFromDevice && !syncPlan_.toRemove.empty() &&
-        !syncConfirmRemove_;
+        syncUi_.options.removeFromDevice && !syncUi_.plan.toRemove.empty() &&
+        !syncUi_.confirmRemove;
 
     aqua::divider();
     aqua::rightAlignButtons(2, 92.0f);
     if (aqua::button("Cancel", ImVec2(92, 0))) {
-        syncOpen_ = false;
+        syncUi_.open = false;
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    const bool blocked = syncPlan_.empty() || !fits || blockedByRemoval ||
+    const bool blocked = syncUi_.plan.empty() || !fits || blockedByRemoval ||
                          sync_.busy();
     ImGui::BeginDisabled(blocked);
     if (aqua::button("Sync", ImVec2(92, 0), !blocked)) {
         startSync();
-        syncOpen_ = false;
+        syncUi_.open = false;
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndDisabled();
-    if (syncPlan_.empty())
+    if (syncUi_.plan.empty())
         aqua::body(fonts_, "Nothing to do — the iPod already matches.");
     aqua::endSheet();
 }
 
 void App::refreshDuplicates() {
-    duplicatesDirty_ = false;
-    duplicateGroups_.clear();
-    duplicateEnabled_.clear();
+    dupes_.dirty = false;
+    dupes_.groups.clear();
+    dupes_.enabled.clear();
     if (!library_) return;
 
-    duplicateGroups_ =
-        findDuplicates(*library_, duplicateMode_, fingerprints_.all());
-    if (duplicatesIdenticalOnly_)
-        std::erase_if(duplicateGroups_, [](const DuplicateGroup& g) {
+    dupes_.groups =
+        findDuplicates(*library_, dupes_.mode, fingerprints_.all());
+    if (dupes_.identicalOnly)
+        std::erase_if(dupes_.groups, [](const DuplicateGroup& g) {
             return !g.allIdenticalFiles;
         });
-    duplicateEnabled_.assign(duplicateGroups_.size(), 1);
+    dupes_.enabled.assign(dupes_.groups.size(), 1);
 }
 
 void App::startVerifyPass() {
-    if (!library_ || verify_.running()) return;
+    if (!library_ || dupes_.verify.running()) return;
     std::vector<VerifyJob::Item> items;
     for (const Track& t : library_->tracks) {
         // Skip anything already fingerprinted; the whole point of persisting
@@ -681,55 +681,55 @@ void App::startVerifyPass() {
         setStatus("Every song on this iPod is already verified");
         return;
     }
-    verify_.start(std::move(items));
+    dupes_.verify.start(std::move(items));
 }
 
 void App::drawDuplicatesModal() {
     // Fold in whatever the verify pass has produced, whether or not the
     // sheet is open, so a cancelled run still keeps its work.
-    if (auto results = verify_.take(); !results.empty()) {
+    if (auto results = dupes_.verify.take(); !results.empty()) {
         for (const auto& [dbid, fp] : results)
             fingerprints_.put(dbid, fp, FingerprintStore::Origin::Device);
-        if (!verify_.running() && library_) fingerprints_.save(loadedMount_);
-        duplicatesDirty_ = true;
+        if (!dupes_.verify.running() && library_) fingerprints_.save(loadedMount_);
+        dupes_.dirty = true;
     }
 
-    if (!duplicatesOpen_) return;
+    if (!dupes_.open) return;
     if (!ImGui::IsPopupOpen("Duplicate Songs"))
         ImGui::OpenPopup("Duplicate Songs");
     if (!aqua::beginSheet("Duplicate Songs", 720.0f)) return;
     if (!library_) {
-        duplicatesOpen_ = false;
+        dupes_.open = false;
         ImGui::CloseCurrentPopup();
         aqua::endSheet();
         return;
     }
-    if (duplicatesDirty_) refreshDuplicates();
+    if (dupes_.dirty) refreshDuplicates();
 
     aqua::heading(fonts_, "Duplicate songs on this iPod");
 
-    int mode = int(duplicateMode_);
+    int mode = int(dupes_.mode);
     if (ImGui::RadioButton("Exact", &mode, int(MatchMode::Exact)))
-        duplicatesDirty_ = true;
+        dupes_.dirty = true;
     ImGui::SameLine();
     if (ImGui::RadioButton("Loose", &mode, int(MatchMode::Loose)))
-        duplicatesDirty_ = true;
-    duplicateMode_ = MatchMode(mode);
+        dupes_.dirty = true;
+    dupes_.mode = MatchMode(mode);
     ImGui::SameLine();
-    aqua::body(fonts_, duplicateMode_ == MatchMode::Exact
+    aqua::body(fonts_, dupes_.mode == MatchMode::Exact
                            ? "artist, title, album and length"
                            : "artist and title only — will group live and "
                              "studio versions of a song");
 
-    if (ImGui::Checkbox("Only byte-identical copies", &duplicatesIdenticalOnly_))
-        duplicatesDirty_ = true;
+    if (ImGui::Checkbox("Only byte-identical copies", &dupes_.identicalOnly))
+        dupes_.dirty = true;
     ImGui::SameLine();
     const int unverified =
         int(library_->tracks.size()) - int(fingerprints_.all().size());
-    if (verify_.running()) {
-        ImGui::Text("Verifying %d/%d…", verify_.done(), verify_.total());
+    if (dupes_.verify.running()) {
+        ImGui::Text("Verifying %d/%d…", dupes_.verify.done(), dupes_.verify.total());
         ImGui::SameLine();
-        if (aqua::button("Stop", ImVec2(70, 0))) verify_.cancel();
+        if (aqua::button("Stop", ImVec2(70, 0))) dupes_.verify.cancel();
     } else {
         ImGui::BeginDisabled(unverified <= 0);
         if (aqua::button("Verify Files on iPod", ImVec2(160, 0)))
@@ -745,31 +745,31 @@ void App::drawDuplicatesModal() {
 
     std::uint64_t totalBytes = 0;
     int totalCopies = 0, activeGroups = 0;
-    for (std::size_t i = 0; i < duplicateGroups_.size(); ++i) {
-        if (!duplicateEnabled_[i]) continue;
+    for (std::size_t i = 0; i < dupes_.groups.size(); ++i) {
+        if (!dupes_.enabled[i]) continue;
         ++activeGroups;
-        totalCopies += int(duplicateGroups_[i].trackIds.size()) - 1;
-        totalBytes += duplicateGroups_[i].reclaimBytes;
+        totalCopies += int(dupes_.groups[i].trackIds.size()) - 1;
+        totalBytes += dupes_.groups[i].reclaimBytes;
     }
 
     ImGui::BeginChild("dupe_list", ImVec2(0, 300));
-    if (duplicateGroups_.empty()) {
+    if (dupes_.groups.empty()) {
         ImGui::Dummy(ImVec2(0, 12));
         ImGui::TextDisabled(
-            duplicatesIdenticalOnly_
+            dupes_.identicalOnly
                 ? "No byte-identical duplicates. Transcoded copies never match "
                   "byte-for-byte — clear the checkbox to see them."
                 : "No duplicates found.");
     }
-    for (std::size_t i = 0; i < duplicateGroups_.size(); ++i) {
-        const DuplicateGroup& g = duplicateGroups_[i];
+    for (std::size_t i = 0; i < dupes_.groups.size(); ++i) {
+        const DuplicateGroup& g = dupes_.groups[i];
         const auto keeperIt = trackIndexById_.find(g.trackIds[0]);
         if (keeperIt == trackIndexById_.end()) continue;
         const Track& keeper = library_->tracks[keeperIt->second];
 
         ImGui::PushID(int(i));
-        bool on = duplicateEnabled_[i] != 0;
-        if (ImGui::Checkbox("##on", &on)) duplicateEnabled_[i] = on ? 1 : 0;
+        bool on = dupes_.enabled[i] != 0;
+        if (ImGui::Checkbox("##on", &on)) dupes_.enabled[i] = on ? 1 : 0;
         ImGui::SameLine();
 
         char header[320];
@@ -803,7 +803,7 @@ void App::drawDuplicatesModal() {
     ImGui::SameLine();
     aqua::rightAlignButtons(2, 110.0f);
     if (aqua::button("Done", ImVec2(110, 0))) {
-        duplicatesOpen_ = false;
+        dupes_.open = false;
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -811,9 +811,9 @@ void App::drawDuplicatesModal() {
     if (aqua::button("Remove Duplicates", ImVec2(110, 0), totalCopies > 0)) {
         std::vector<std::uint32_t> doomed;
         KeeperRemap remap;
-        for (std::size_t i = 0; i < duplicateGroups_.size(); ++i) {
-            if (!duplicateEnabled_[i]) continue;
-            const auto& ids = duplicateGroups_[i].trackIds;
+        for (std::size_t i = 0; i < dupes_.groups.size(); ++i) {
+            if (!dupes_.enabled[i]) continue;
+            const auto& ids = dupes_.groups[i].trackIds;
             for (std::size_t k = 1; k < ids.size(); ++k) {
                 doomed.push_back(ids[k]);
                 remap[ids[k]] = ids[0];  // playlists follow the keeper
@@ -822,7 +822,7 @@ void App::drawDuplicatesModal() {
         const int removed = performDeleteMany(doomed, &remap);
         setStatus("Removed " + plural(removed, "duplicate", "duplicates") +
                   " · freed " + formatBytes(totalBytes));
-        duplicatesOpen_ = false;
+        dupes_.open = false;
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndDisabled();
@@ -915,13 +915,13 @@ void App::drawRestoreModal() {
 }
 
 void App::drawDeletePlaylistModal() {
-    if (deletePlaylistIndex_ >= 0 && !ImGui::IsPopupOpen("Delete Playlist"))
+    if (plEdit_.deleteIndex >= 0 && !ImGui::IsPopupOpen("Delete Playlist"))
         ImGui::OpenPopup("Delete Playlist");
     if (!aqua::beginSheet("Delete Playlist", 460.0f)) return;
 
-    if (!library_ || deletePlaylistIndex_ < 0 ||
-        deletePlaylistIndex_ >= int(library_->playlists.size())) {
-        deletePlaylistIndex_ = -2;
+    if (!library_ || plEdit_.deleteIndex < 0 ||
+        plEdit_.deleteIndex >= int(library_->playlists.size())) {
+        plEdit_.deleteIndex = -2;
         ImGui::CloseCurrentPopup();
         aqua::endSheet();
         return;
@@ -929,7 +929,7 @@ void App::drawDeletePlaylistModal() {
 
     aqua::heading(fonts_,
                   ("Are you sure you want to delete the playlist \u201c" +
-                   library_->playlists[deletePlaylistIndex_].name +
+                   library_->playlists[plEdit_.deleteIndex].name +
                    "\u201d?")
                       .c_str());
     aqua::body(fonts_,
@@ -938,13 +938,13 @@ void App::drawDeletePlaylistModal() {
     aqua::divider();
     aqua::rightAlignButtons(2, 92.0f);
     if (aqua::button("Cancel", ImVec2(92, 0))) {
-        deletePlaylistIndex_ = -2;
+        plEdit_.deleteIndex = -2;
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
     if (aqua::button("Delete", ImVec2(92, 0), true)) {
-        const int idx = deletePlaylistIndex_;
-        deletePlaylistIndex_ = -2;
+        const int idx = plEdit_.deleteIndex;
+        plEdit_.deleteIndex = -2;
         library_->playlists.erase(library_->playlists.begin() + idx);
         if (view_ == View::Playlist && playlistIndex_ == idx)
             switchSource(View::Music);
