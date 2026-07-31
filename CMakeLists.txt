@@ -4,6 +4,31 @@ project(PodBox VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Without this an unqualified `cmake -S . -B build` produces an unoptimised
+# binary, which is not what anyone typing that expects.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "" FORCE)
+endif()
+
+if(APPLE)
+  # The Info.plist has claimed macOS 11 since the bundle existed; this is what
+  # makes the compiler agree, rather than silently emitting calls that are
+  # unavailable there.
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
+
+  # Off by default because it doubles build time and every dependency has to
+  # be built twice too. Turn it on for a release: -DPODBOX_UNIVERSAL=ON
+  option(PODBOX_UNIVERSAL "Build a universal arm64 + x86_64 binary" OFF)
+  if(PODBOX_UNIVERSAL)
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
+  endif()
+endif()
+
+# Version as the code sees it, so the About text and a bug report can agree
+# with the bundle.
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/version.h.in
+               ${CMAKE_CURRENT_BINARY_DIR}/generated/podbox_version.h @ONLY)
+
 include(FetchContent)
 
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -44,7 +69,6 @@ add_library(imgui_lib STATIC
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/imgui_tables.cpp
   ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-  ${imgui_SOURCE_DIR}/imgui_demo.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
 target_include_directories(imgui_lib PUBLIC
@@ -81,7 +105,14 @@ add_library(podbox_core STATIC
   src/sync/sync_engine.cpp
   src/sync/sync_plan.cpp
   src/sync/verify_job.cpp)
-target_include_directories(podbox_core PUBLIC src)
+target_include_directories(podbox_core PUBLIC src
+  ${CMAKE_CURRENT_BINARY_DIR}/generated)
+
+# Our code only: the fetched dependencies are not ours to clean up, and
+# warnings we cannot act on are warnings everyone learns to ignore.
+if(NOT MSVC)
+  target_compile_options(podbox_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 target_include_directories(podbox_core PRIVATE ${TAGLIB_INCLUDES}
   ${stb_SOURCE_DIR})
 target_link_libraries(podbox_core PUBLIC tag)
@@ -111,6 +142,9 @@ add_executable(podbox MACOSX_BUNDLE
   ${PODBOX_AUDIO_SRC}
   $<$<BOOL:${APPLE}>:${PODBOX_ICON}>)
 target_link_libraries(podbox PRIVATE podbox_core imgui_lib)
+if(NOT MSVC)
+  target_compile_options(podbox PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 if(APPLE)
   set_target_properties(podbox PROPERTIES
@@ -173,8 +207,15 @@ endif()
 include(GNUInstallDirs)
 option(PODBOX_INSTALL_TOOLS "Install the command-line test tools" OFF)
 
+# Where the bundle lands inside the install prefix. The DMG wants it at the
+# root, beside the /Applications symlink CPack adds for the drag; package
+# managers want it under Applications/. Defaults to the DMG layout because
+# that is what a release is; Nix passes Applications explicitly.
+set(PODBOX_BUNDLE_DEST "." CACHE STRING
+    "Install destination for PodBox.app inside the prefix")
+
 if(APPLE)
-  install(TARGETS podbox BUNDLE DESTINATION Applications)
+  install(TARGETS podbox BUNDLE DESTINATION ${PODBOX_BUNDLE_DEST})
 else()
   install(TARGETS podbox RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
@@ -189,3 +230,17 @@ endif()
 # is the one worth wiring into CTest. Run with: ctest --test-dir build
 enable_testing()
 add_test(NAME dedupe COMMAND dedupe_test)
+
+# A DMG for releases: `cpack -G DragNDrop --config build/CPackConfig.cmake`,
+# or `cmake --build build --target package`. Unsigned, like the app itself,
+# so it still needs a right-click Open on the other side.
+set(CPACK_PACKAGE_NAME "PodBox")
+set(CPACK_PACKAGE_VENDOR "Milan Marocchi")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_FILE_NAME "PodBox-${PROJECT_VERSION}")
+set(CPACK_RESOURCE_FILE_LICENSE ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE)
+if(APPLE)
+  set(CPACK_GENERATOR "DragNDrop")
+  set(CPACK_DMG_VOLUME_NAME "PodBox ${PROJECT_VERSION}")
+endif()
+include(CPack)

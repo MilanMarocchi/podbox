@@ -1,6 +1,8 @@
 #include "app/app.h"
 #include "ui/theme.h"
 
+#include <podbox_version.h>
+
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
@@ -9,6 +11,7 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdio>
+#include <string>
 
 int main() {
     glfwSetErrorCallback([](int code, const char* desc) {
@@ -21,7 +24,10 @@ int main() {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 
-    GLFWwindow* window = glfwCreateWindow(1100, 720, "PodBox", nullptr, nullptr);
+    // Version in the title so a screenshot in a bug report identifies itself.
+    const std::string title = std::string("PodBox ") + podbox::kVersion;
+    GLFWwindow* window =
+        glfwCreateWindow(1100, 720, title.c_str(), nullptr, nullptr);
     if (!window) {
         glfwTerminate();
         return 1;

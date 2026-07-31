@@ -60,6 +60,7 @@ stdenv.mkDerivation {
     # docs does not invalidate the build.
     fileset = lib.fileset.unions [
       ../CMakeLists.txt
+      ../LICENSE  # CPack reads it for the DMG
       ../src
       ../tools
       ../packaging
@@ -79,6 +80,8 @@ stdenv.mkDerivation {
     # silent network call that fails in the sandbox.
     (lib.cmakeBool "FETCHCONTENT_FULLY_DISCONNECTED" true)
     (lib.cmakeBool "PODBOX_INSTALL_TOOLS" true)
+    # nixpkgs convention; the default is the DMG layout.
+    (lib.cmakeFeature "PODBOX_BUNDLE_DEST" "Applications")
     # Release, not RelWithDebInfo, and the choice is load-bearing for
     # reproducibility. With -g, each object file records the directory it was
     # compiled in; Nix randomises that per build. The paths themselves are
