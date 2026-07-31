@@ -546,12 +546,143 @@ void App::drawMainPanel(float height) {
             ImVec2((avail.x - ts.x) * 0.5f, (avail.y - ts.y) * 0.5f));
         ImGui::TextDisabled("%s", msg);
     } else if (trackView) {
+        // The browser reads the search-filtered set and constrains the table,
+        // and both come out of one rebuild — so it has to happen before either
+        // is drawn, not between them.
+        if (visibleDirty_) rebuildVisible();
+        if (browserApplies()) drawColumnBrowser(width);
         drawTrackTable();
     } else {
         drawDeviceView(*dev);
     }
 
     ImGui::EndChild();
+}
+
+void App::drawColumnBrowser(float width) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    constexpr float kHeadH = 17.0f, kRowH = 17.0f;
+
+    // Clamped every frame rather than only on drag, so shrinking the window
+    // cannot strand the splitter past the bottom of the panel.
+    const float maxH = std::max(60.0f, ImGui::GetWindowHeight() - 140.0f);
+    browser_.height = std::clamp(browser_.height, 60.0f, maxH);
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, v4(pal::BrowserBg));
+    ImGui::BeginChild("browser", ImVec2(width, browser_.height), false,
+                      ImGuiWindowFlags_NoScrollbar);
+
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const float paneW = std::floor(width / 3.0f);
+
+    struct Pane {
+        const char* title;
+        std::vector<std::string>* values;
+        std::optional<std::string>* sel;
+        const char* noun;
+    };
+    const Pane panes[3] = {
+        {"Genres", &browser_.genres, &browser_.genre, "Genres"},
+        {"Artists", &browser_.artists, &browser_.artist, "Artists"},
+        {"Albums", &browser_.albums, &browser_.album, "Albums"},
+    };
+
+    for (int i = 0; i < 3; ++i) {
+        // The last pane takes the remainder so the three always reach the edge.
+        const float x0 = origin.x + paneW * i;
+        const float w = (i == 2) ? (origin.x + width - x0) : paneW;
+
+        aqua::gradientRect(dl, ImVec2(x0, origin.y),
+                           ImVec2(x0 + w, origin.y + kHeadH),
+                           pal::BrowserHeadTop, pal::BrowserHeadBottom,
+                           pal::BrowserBorder, 0.0f, false);
+        addTextCentered(dl, fonts_.labelBold, fonts_.labelSize,
+                        ImVec2(x0 + w * 0.5f, origin.y + kHeadH * 0.5f),
+                        pal::BrowserHeadText, panes[i].title);
+
+        ImGui::SetCursorScreenPos(ImVec2(x0, origin.y + kHeadH));
+        ImGui::PushID(i);
+        ImGui::BeginChild("pane", ImVec2(w - 1.0f, browser_.height - kHeadH));
+        ImDrawList* pdl = ImGui::GetWindowDrawList();
+
+        // One row: a transparent selectable with the label drawn by hand, so
+        // the indent and the ellipsis are ours. Same shape as the source list.
+        int rowNo = 0;
+        auto row = [&](const std::string& text, bool selected) {
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            ImGui::PushStyleColor(ImGuiCol_Header, v4(pal::Selection));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, v4(pal::Selection));
+            ImGui::PushStyleColor(ImGuiCol_HeaderActive, v4(pal::Selection));
+            const bool clicked =
+                ImGui::Selectable("##r", selected, 0, ImVec2(0, kRowH));
+            ImGui::PopStyleColor(3);
+            const ImVec2 mn = ImGui::GetItemRectMin();
+            const ImVec2 mx = ImGui::GetItemRectMax();
+            if (selected)
+                aqua::selectionGradient(pdl, mn, mx);
+            else if (rowNo % 2)
+                pdl->AddRectFilled(mn, mx, pal::BrowserRowAlt);
+            pdl->PushClipRect(mn, ImVec2(mx.x - 4.0f, mx.y), true);
+            pdl->AddText(fonts_.ui, fonts_.uiSize,
+                         ImVec2(p.x + 6.0f, p.y + 1.0f),
+                         selected ? IM_COL32_WHITE : pal::Text, text.c_str());
+            pdl->PopClipRect();
+            ++rowNo;
+            return clicked;
+        };
+
+        const std::string allLabel = "All (" +
+                                     std::to_string(panes[i].values->size()) +
+                                     " " + panes[i].noun + ")";
+        ImGui::PushID("all");
+        if (row(allLabel, !panes[i].sel->has_value())) {
+            panes[i].sel->reset();
+            visibleDirty_ = true;
+        }
+        ImGui::PopID();
+
+        for (int k = 0; k < int(panes[i].values->size()); ++k) {
+            const std::string& v = (*panes[i].values)[k];
+            const bool selected =
+                panes[i].sel->has_value() && **panes[i].sel == v;
+            ImGui::PushID(k);
+            // A blank artist or genre is common in ripped music and is a real
+            // facet, so it gets a label rather than an empty row.
+            if (row(v.empty() ? "Unknown" : v, selected) && !selected) {
+                *panes[i].sel = v;
+                visibleDirty_ = true;
+            }
+            ImGui::PopID();
+        }
+
+        ImGui::EndChild();
+        ImGui::PopID();
+
+        if (i < 2)
+            dl->AddLine(ImVec2(x0 + w - 0.5f, origin.y),
+                        ImVec2(x0 + w - 0.5f, origin.y + browser_.height),
+                        pal::BrowserBorder);
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+
+    // Splitter. Session-lived: there is no UI settings file, and inventing one
+    // for a divider position is not worth it.
+    const ImVec2 sp = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##browser_split", ImVec2(width, 5.0f));
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    if (ImGui::IsItemActive())
+        browser_.height = std::clamp(
+            browser_.height + ImGui::GetIO().MouseDelta.y, 60.0f, maxH);
+    dl->AddRectFilledMultiColor(sp, ImVec2(sp.x + width, sp.y + 5.0f),
+                                pal::BrowserHeadTop, pal::BrowserHeadTop,
+                                pal::BrowserHeadBottom, pal::BrowserHeadBottom);
+    dl->AddLine(ImVec2(sp.x, sp.y + 0.5f), ImVec2(sp.x + width, sp.y + 0.5f),
+                pal::BrowserBorder);
+    dl->AddLine(ImVec2(sp.x, sp.y + 4.5f), ImVec2(sp.x + width, sp.y + 4.5f),
+                pal::BrowserBorder);
 }
 
 void App::drawDeviceView(const IpodInfo& dev) {
@@ -749,10 +880,13 @@ void App::drawTrackTable() {
     }
     if (visibleDirty_) rebuildVisible();
 
-    // Reordering is only meaningful for a playlist shown in manual order
-    // (no search filter, no column sort).
+    // Reordering is only meaningful for a playlist shown in manual order (no
+    // search filter, no column sort, no browser facet). The browser never
+    // shows in a playlist, so that last clause is belt and braces — but a
+    // hidden filter is exactly what would make a drag land on the wrong row.
     const bool reorderable = view_ == View::Playlist && playlistIndex_ >= 0 &&
-                             sortCol_ == 0 && search_[0] == '\0';
+                             sortCol_ == 0 && search_[0] == '\0' &&
+                             !browser_.engaged();
     int reorderFrom = -1, reorderTo = -1;
 
     // iTunes highlights rows on selection only, not hover.

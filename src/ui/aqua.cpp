@@ -152,6 +152,12 @@ void body(const Fonts& f, const char* fmt, ...) {
     ImGui::PopFont();
 }
 
+void selectionGradient(ImDrawList* dl, ImVec2 a, ImVec2 b) {
+    dl->AddRectFilledMultiColor(a, b, pal::SelectionTop, pal::SelectionTop,
+                                pal::SelectionBottom, pal::SelectionBottom);
+    dl->AddLine(a, ImVec2(b.x, a.y), pal::SelectionEdge);
+}
+
 void divider() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p = ImGui::GetCursorScreenPos();

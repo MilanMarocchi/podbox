@@ -65,6 +65,11 @@ private:
     void pullPlayCountsToHost();
     void applyFinishedScan();
     void rebuildVisible();
+    // The column browser only applies where faceting a whole collection makes
+    // sense. Playlists are small and manually ordered, and a hidden filter is
+    // exactly what would corrupt a drag-reorder.
+    bool browserApplies() const;
+    void drawColumnBrowser(float width);
     void applyCompletedAdds();
     bool writeDatabase();
     // True when this iPod's database can be rewritten at all. iPod classic and
@@ -174,6 +179,23 @@ private:
     std::uint32_t selectedTrackId_ = 0;
     std::vector<std::uint32_t> selection_;
     std::uint32_t selectionAnchor_ = 0;  // for shift-click ranges
+
+    // The Genres | Artists | Albums browser above the track list.
+    //
+    // Selections are strings rather than indices because the facet lists are
+    // rebuilt on every keystroke, which would leave an index pointing at
+    // something else. nullopt means "All"; an engaged empty string is the real
+    // blank-genre facet, shown as "Unknown" — a lot of ripped music has no
+    // genre, and conflating the two would make that row unselectable.
+    struct ColumnBrowser {
+        std::optional<std::string> genre, artist, album;
+        std::vector<std::string> genres, artists, albums;
+        bool visible = true;
+        float height = 170.0f;
+        bool engaged() const { return genre || artist || album; }
+        void clearSelection() { genre.reset(); artist.reset(); album.reset(); }
+    };
+    ColumnBrowser browser_;
 
     SyncEngine sync_;
     ImportFormat importFormat_ = ImportFormat::Original;

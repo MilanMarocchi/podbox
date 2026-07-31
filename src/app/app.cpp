@@ -31,6 +31,7 @@
 #include <ctime>
 #include <random>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 
 #include <strings.h>  // strcasecmp
@@ -725,6 +726,36 @@ void App::applyFinishedScan() {
     }
 }
 
+bool App::browserApplies() const {
+    return browser_.visible &&
+           (view_ == View::Music || view_ == View::Library);
+}
+
+namespace {
+
+// Distinct values of one Track string field over `rows`, case-insensitively
+// sorted, keeping only rows the caller accepts. The string_view keys are safe
+// because nothing mutates the library while a frame is being built.
+template <class Keep>
+std::vector<std::string> distinctValues(const Library& lib,
+                                        const std::vector<int>& rows,
+                                        std::string Track::*field, Keep keep) {
+    std::unordered_set<std::string_view> seen;
+    std::vector<std::string> out;
+    for (const int ti : rows) {
+        const Track& t = lib.tracks[ti];
+        if (!keep(t)) continue;
+        if (seen.insert(t.*field).second) out.push_back(t.*field);
+    }
+    std::sort(out.begin(), out.end(),
+              [](const std::string& a, const std::string& b) {
+                  return cmpCi(a, b) < 0;
+              });
+    return out;
+}
+
+}  // namespace
+
 void App::rebuildVisible() {
     visibleDirty_ = false;
     visible_.clear();
@@ -732,6 +763,12 @@ void App::rebuildVisible() {
     const auto* index = shownIndex();
     if (!lib || !index) return;
 
+    // A browser selection that is not on screen would still filter, which is
+    // the worst bug available here — so leaving its views drops it entirely
+    // rather than merely ignoring it.
+    if (!browserApplies()) browser_.clearSelection();
+
+    // (A) everything this source could show, in its natural order.
     std::vector<int> base;
     if (view_ == View::Playlist && playlistIndex_ >= 0 &&
         playlistIndex_ < int(lib->playlists.size())) {
@@ -744,14 +781,67 @@ void App::rebuildVisible() {
         for (int i = 0; i < int(base.size()); ++i) base[i] = i;
     }
 
+    // (B) narrowed by the search box alone. The browser's lists are built from
+    // this, and the table from a further narrowing of it — which is what stops
+    // the two from being circular: the browser reads the set upstream of the
+    // one it constrains, never the one it produces.
     const std::string needle = toLower(search_);
-    visible_.reserve(base.size());
+    std::vector<int> searched;
+    searched.reserve(base.size());
     for (const int ti : base) {
         const Track& t = lib->tracks[ti];
         if (needle.empty() || containsCi(t.title, needle) ||
-            containsCi(t.artist, needle) || containsCi(t.album, needle)) {
+            containsCi(t.artist, needle) || containsCi(t.album, needle))
+            searched.push_back(ti);
+    }
+
+    // (C) the three facet lists, built strictly left to right. Each list is
+    // narrowed by the selections to its left, and a selection that is no
+    // longer in its own list falls back to All. Because list k depends only on
+    // facets 0..k-1, one forward pass reaches a fixpoint.
+    auto matches = [](const std::optional<std::string>& sel,
+                      const std::string& value) {
+        return !sel || *sel == value;
+    };
+    if (browserApplies()) {
+        auto& b = browser_;
+        b.genres = distinctValues(*lib, searched, &Track::genre,
+                                  [](const Track&) { return true; });
+        if (b.genre && std::find(b.genres.begin(), b.genres.end(), *b.genre) ==
+                           b.genres.end())
+            b.genre.reset();
+
+        b.artists =
+            distinctValues(*lib, searched, &Track::artist, [&](const Track& t) {
+                return matches(b.genre, t.genre);
+            });
+        if (b.artist && std::find(b.artists.begin(), b.artists.end(),
+                                  *b.artist) == b.artists.end())
+            b.artist.reset();
+
+        b.albums =
+            distinctValues(*lib, searched, &Track::album, [&](const Track& t) {
+                return matches(b.genre, t.genre) &&
+                       matches(b.artist, t.artist);
+            });
+        if (b.album && std::find(b.albums.begin(), b.albums.end(), *b.album) ==
+                           b.albums.end())
+            b.album.reset();
+    } else {
+        browser_.genres.clear();
+        browser_.artists.clear();
+        browser_.albums.clear();
+    }
+
+    // (D) what the table shows. The numbering is load-bearing: shift-click
+    // ranges and playlist drag-reorder both index through it.
+    visible_.reserve(searched.size());
+    for (const int ti : searched) {
+        const Track& t = lib->tracks[ti];
+        if (matches(browser_.genre, t.genre) &&
+            matches(browser_.artist, t.artist) &&
+            matches(browser_.album, t.album))
             visible_.emplace_back(int(visible_.size()), ti);
-        }
     }
 
     const auto& tracks = lib->tracks;
