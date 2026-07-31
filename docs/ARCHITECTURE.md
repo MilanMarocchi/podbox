@@ -70,6 +70,19 @@ The algorithm was reverse-engineered by wtbw and first implemented by Christophe
 Fergeau for libgpod under a 3-clause BSD licence, which is why that notice is
 reproduced at the top of the file.
 
+The GUID it is keyed on comes from `iPod_Control/Device/SysInfoExtended`, and
+failing that from the device's USB serial number via IOKit
+(`device/usb_serial.h`) — plenty of iPods have no SysInfoExtended at all, and
+without a GUID a signing device can never be verified and so can never be
+written.
+
+**hashAB is not implemented and should not be copied in.** Unlike hash58 —
+published analysis, an independent BSD implementation, constants that turn out
+to be the public AES S-box — hashAB exists publicly only as an unlicensed
+binary (`libhashab.so`) derived from Apple's own code, with no source and no
+published description. Implementing it would mean transcribing a disassembly of
+proprietary code into an MIT project. Devices using it stay read-only.
+
 Its correctness is established in two halves. SHA-1, HMAC-SHA1, the derived key
 and the AES S-boxes are covered by `hash58_test` against published vectors — and
 the S-boxes are *generated* rather than tabulated, so there is no page of magic

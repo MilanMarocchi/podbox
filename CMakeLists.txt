@@ -93,6 +93,7 @@ set(TAGLIB_INCLUDES
 add_library(podbox_core STATIC
   src/device/device_watcher.cpp
   src/device/ipod_device.cpp
+  $<IF:$<BOOL:${APPLE}>,src/device/usb_serial_mac.cpp,src/device/usb_serial_stub.cpp>
   src/itdb/hash58.cpp
   src/itdb/itunesdb.cpp
   src/itdb/itunesdb_writer.cpp
@@ -119,6 +120,11 @@ endif()
 target_include_directories(podbox_core PRIVATE ${TAGLIB_INCLUDES}
   ${stb_SOURCE_DIR})
 target_link_libraries(podbox_core PUBLIC tag)
+if(APPLE)
+  # IOKit: reads the iPod's USB serial when SysInfoExtended is missing.
+  target_link_libraries(podbox_core PUBLIC "-framework IOKit"
+    "-framework CoreFoundation")
+endif()
 
 if(APPLE)
   set(PODBOX_AUDIO_SRC src/audio/player_avf.mm)

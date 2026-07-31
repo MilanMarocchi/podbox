@@ -1,5 +1,7 @@
 #include "device/ipod_device.h"
 
+#include "device/usb_serial.h"
+
 #include <array>
 #include <cstdio>
 #include <fstream>
@@ -239,6 +241,13 @@ std::optional<IpodInfo> findIpod() {
                 info.firewireGuid = plistString(xml, "FireWireGUID");
             }
         }
+        // Plenty of iPods have no SysInfoExtended at all — restored units,
+        // flash mods, anything whose SysInfo was written empty. The USB serial
+        // is the same value, and without it a device that signs its database
+        // can never be verified and so can never be written.
+        if (info.firewireGuid.empty())
+            info.firewireGuid = usbSerialForMount(entry.path());
+
         info.modelName = lookupModelName(info.modelNumber);
         info.filesystem = detectFilesystem(entry.path());
 
