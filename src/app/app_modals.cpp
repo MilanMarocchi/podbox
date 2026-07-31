@@ -360,6 +360,29 @@ void App::drawAppleMusicModal() {
     aqua::endSheet();
 }
 
+namespace {
+
+// The media types a user can pick between. Video is deliberately absent: a
+// classic iPod plays it, but PodBox neither imports nor lists it, so offering
+// it here would only let someone hide a track from every view.
+struct MediaChoice {
+    const char* label;
+    std::uint32_t type;
+};
+constexpr MediaChoice kMediaChoices[] = {
+    {"Music", kMediaAudio},
+    {"Podcast", kMediaPodcast},
+    {"Audiobook", kMediaAudiobook},
+};
+
+int mediaIndexOf(std::uint32_t type) {
+    for (int i = 0; i < int(std::size(kMediaChoices)); ++i)
+        if (kMediaChoices[i].type == type) return i;
+    return 0;  // an unset or unrecognised type is music
+}
+
+}  // namespace
+
 void App::openGetInfo() {
     const Library* shown = shownLibrary();
     const auto* index = shownIndex();
@@ -369,7 +392,7 @@ void App::openGetInfo() {
     // differ start blank and are left alone unless the user types something.
     const Track* first = nullptr;
     bool sameTitle = true, sameArtist = true, sameAlbum = true;
-    bool sameGenre = true, sameYear = true, sameTrack = true;
+    bool sameGenre = true, sameYear = true, sameTrack = true, sameMedia = true;
     for (std::uint32_t id : selection_) {
         const auto it = index->find(id);
         if (it == index->end()) continue;
@@ -384,6 +407,7 @@ void App::openGetInfo() {
         sameGenre &= t.genre == first->genre;
         sameYear &= t.year == first->year;
         sameTrack &= t.trackNumber == first->trackNumber;
+        sameMedia &= t.mediaType == first->mediaType;
     }
     if (!first) return;
 
@@ -403,6 +427,7 @@ void App::openGetInfo() {
                   sameTrack && first->trackNumber
                       ? std::to_string(first->trackNumber).c_str()
                       : "");
+    getInfo_.mediaChoice = sameMedia ? mediaIndexOf(first->mediaType) : -1;
     getInfo_.writeTags = false;
     getInfo_.open = true;
 }
@@ -432,6 +457,24 @@ void App::drawGetInfoModal() {
     if (n == 1)
         ImGui::InputText("Track number", getInfo_.track, sizeof(getInfo_.track),
                          ImGuiInputTextFlags_CharsDecimal);
+    // Media type is classified on import from the extension and the genre,
+    // which is a guess for anything that is not .m4b. This is where a wrong
+    // guess gets corrected.
+    {
+        const char* preview =
+            getInfo_.mediaChoice < 0
+                ? "Multiple"
+                : kMediaChoices[getInfo_.mediaChoice].label;
+        if (ImGui::BeginCombo("Media kind", preview)) {
+            for (int i = 0; i < int(std::size(kMediaChoices)); ++i) {
+                const bool sel = getInfo_.mediaChoice == i;
+                if (ImGui::Selectable(kMediaChoices[i].label, sel))
+                    getInfo_.mediaChoice = i;
+                if (sel) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+    }
     ImGui::PopItemWidth();
 
     ImGui::Spacing();
@@ -472,6 +515,8 @@ void App::drawGetInfoModal() {
                 if (getInfo_.year[0]) h->meta.year = std::uint32_t(std::atoi(getInfo_.year));
                 if (getInfo_.track[0])
                     h->meta.trackNumber = std::uint32_t(std::atoi(getInfo_.track));
+                if (getInfo_.mediaChoice >= 0)
+                    h->meta.mediaType = kMediaChoices[getInfo_.mediaChoice].type;
                 ++changed;
                 if (getInfo_.writeTags) {
                     std::string err;
@@ -489,6 +534,8 @@ void App::drawGetInfoModal() {
                 if (getInfo_.year[0]) t.year = std::uint32_t(std::atoi(getInfo_.year));
                 if (getInfo_.track[0])
                     t.trackNumber = std::uint32_t(std::atoi(getInfo_.track));
+                if (getInfo_.mediaChoice >= 0)
+                    t.mediaType = kMediaChoices[getInfo_.mediaChoice].type;
                 ++changed;
             }
         }

@@ -236,6 +236,9 @@ private:
         char year[8] = {};
         char track[8] = {};
         bool writeTags = false;
+        // Index into the kMediaChoices table, or -1 when a multi-selection
+        // spans several types — which means "leave each track's own alone".
+        int mediaChoice = -1;
     };
     GetInfoEdit getInfo_;
 
