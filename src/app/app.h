@@ -295,9 +295,14 @@ private:
     bool ejectRequested_ = false;
 
     // Playback.
+    enum class Repeat { Off, All, One };
     std::unique_ptr<AudioPlayer> player_;
     std::uint32_t playingTrackId_ = 0;
     bool scrubbing_ = false;
+    bool shuffle_ = false;
+    Repeat repeat_ = Repeat::Off;
+    // The sidebar's Now Playing well, toggled from the status bar.
+    bool artworkPaneOpen_ = true;
 };
 
 }  // namespace podbox

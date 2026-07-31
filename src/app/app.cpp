@@ -483,8 +483,12 @@ bool App::animating() const {
 
 void App::updatePlayback() {
     if (!player_ || playingTrackId_ == 0) return;
-    // Auto-advance to the next visible track when one finishes.
-    if (player_->reachedEnd()) playRelative(+1);
+    if (!player_->reachedEnd()) return;
+    // Repeat One re-opens the same track; everything else advances.
+    if (repeat_ == Repeat::One)
+        playTrackId(playingTrackId_);
+    else
+        playRelative(+1);
 }
 
 void App::playTrackId(std::uint32_t trackId) {
@@ -516,12 +520,25 @@ void App::playRelative(int delta) {
             break;
         }
     }
-    const int next = cur + delta;
-    if (next < 0 || next >= int(visible_.size())) {
-        // Off either end: stop playback.
-        player_->stop();
-        playingTrackId_ = 0;
+    if (shuffle_ && visible_.size() > 1) {
+        // Anywhere but here, so a two-track list still alternates.
+        static std::mt19937 rng{std::random_device{}()};
+        int pick = cur;
+        while (pick == cur)
+            pick = int(rng() % visible_.size());
+        playTrackId(library_->tracks[visible_[pick].second].id);
         return;
+    }
+
+    int next = cur + delta;
+    if (next < 0 || next >= int(visible_.size())) {
+        if (repeat_ != Repeat::All) {
+            // Off either end: stop playback.
+            player_->stop();
+            playingTrackId_ = 0;
+            return;
+        }
+        next = next < 0 ? int(visible_.size()) - 1 : 0;
     }
     playTrackId(library_->tracks[visible_[next].second].id);
 }

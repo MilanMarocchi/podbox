@@ -170,19 +170,29 @@ void App::drawTransport(float toolbarWidth) {
         if (clicked && haveList) playRelative(+1);
     }
 
-    // Volume slider with a small speaker glyph.
+    // Volume slider, with a quiet speaker at one end and a loud one at the
+    // other the way iTunes 10 drew it. Widened to keep the travel unchanged
+    // now that both ends carry a glyph.
     x += 10.0f;
     ImGui::SetCursorPos(ImVec2(x, cy - 8.0f));
-    ImGui::InvisibleButton("##volume", ImVec2(88.0f, 16.0f));
+    ImGui::InvisibleButton("##volume", ImVec2(104.0f, 16.0f));
     const ImVec2 vmn = ImGui::GetItemRectMin();
     const ImVec2 vmx = ImGui::GetItemRectMax();
     const float ty = (vmn.y + vmx.y) * 0.5f;
-    const float tx0 = vmn.x + 16.0f, tx1 = vmx.x;
-    // Speaker.
-    dl->AddRectFilled(ImVec2(vmn.x, ty - 3), ImVec2(vmn.x + 4, ty + 3),
-                      pal::Glyph);
-    dl->AddTriangleFilled(ImVec2(vmn.x + 4, ty - 5), ImVec2(vmn.x + 4, ty + 5),
-                          ImVec2(vmn.x + 9, ty), pal::Glyph);
+    const float tx0 = vmn.x + 16.0f, tx1 = vmx.x - 20.0f;
+    auto speaker = [&](float sx) {
+        dl->AddRectFilled(ImVec2(sx, ty - 3), ImVec2(sx + 4, ty + 3),
+                          pal::Glyph);
+        dl->AddTriangleFilled(ImVec2(sx + 4, ty - 5), ImVec2(sx + 4, ty + 5),
+                              ImVec2(sx + 9, ty), pal::Glyph);
+    };
+    speaker(vmn.x);
+    speaker(vmx.x - 16.0f);
+    // The two arcs that make the right-hand speaker the loud one.
+    for (float r : {4.0f, 6.5f}) {
+        dl->PathArcTo(ImVec2(vmx.x - 12.0f, ty), r, -1.05f, 1.05f, 12);
+        dl->PathStroke(pal::Glyph, 0, 1.2f);
+    }
     float vol = player_ ? player_->volume() : 0.0f;
     if (ImGui::IsItemActive()) {
         vol = std::clamp((ImGui::GetIO().MousePos.x - tx0) / (tx1 - tx0), 0.0f,
@@ -268,16 +278,18 @@ void App::drawToolbar() {
         const ImVec2 a(p.x + (w - lcdW) * 0.5f,
                        p.y + (kToolbarHeight - kLcdHeight) * 0.5f);
         const ImVec2 b(a.x + lcdW, a.y + kLcdHeight);
-        // Sunken well: a soft vertical wash, a dark inner top edge for the
-        // recess, and a highlight just below the frame.
-        dl->AddRectFilled(a, b, pal::LcdBg, 5.0f);
-        dl->AddRectFilledMultiColor(
-            ImVec2(a.x + 1, a.y + 1), ImVec2(b.x - 1, a.y + kLcdHeight * 0.55f),
-            IM_COL32(255, 255, 255, 150), IM_COL32(255, 255, 255, 150),
-            IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
+        // Shallow well. iTunes 10 lost the tall glossy wash the earlier
+        // versions had over the top half — that gloss is the single most
+        // iTunes-9 thing on screen — leaving a flat face, one dark inner top
+        // edge for the recess, and a highlight just below the frame.
+        dl->AddRectFilled(a, b, pal::LcdBg, 4.0f);
+        dl->AddRectFilledMultiColor(ImVec2(a.x + 1, a.y + 1),
+                                    ImVec2(b.x - 1, b.y - 1), pal::LcdBgTop,
+                                    pal::LcdBgTop, pal::LcdBgBottom,
+                                    pal::LcdBgBottom);
         dl->AddLine(ImVec2(a.x + 4, a.y + 1.0f), ImVec2(b.x - 4, a.y + 1.0f),
                     IM_COL32(120, 132, 145, 110));
-        dl->AddRect(a, b, pal::LcdBorder, 5.0f);
+        dl->AddRect(a, b, pal::LcdBorder, 4.0f);
         dl->AddLine(ImVec2(a.x + 4, b.y + 0.5f), ImVec2(b.x - 4, b.y + 0.5f),
                     IM_COL32(255, 255, 255, 170));
 
@@ -323,17 +335,96 @@ void App::drawToolbar() {
         }
     }
 
-    // Search box, right-aligned like iTunes.
-    if (library_ && w > kLcdWidth + 2.0f * (kSearchWidth + 60.0f)) {
+    // View-mode segments, immediately left of the search field. Only the first
+    // is implemented; the others are drawn dim and drop their clicks.
+    constexpr float kSegW = 30.0f, kSegH = 22.0f, kSegs = 4;
+    const float segTotal = kSegW * kSegs;
+    const float segX = w - kSearchWidth - 16.0f - segTotal - 12.0f;
+    if (w > 1000.0f) {
+        const ImVec2 sa(p.x + segX, p.y + (kToolbarHeight - kSegH) * 0.5f);
+        const ImVec2 sb(sa.x + segTotal, sa.y + kSegH);
+        aqua::gradientRect(dl, sa, sb, pal::ControlTop, pal::ControlBottom,
+                           pal::ControlBorder, 4.0f);
+        // The active segment is the whole rounded capsule redrawn inset and
+        // clipped to one cell — which gives rounded outer corners and square
+        // inner edges without any per-corner flag bookkeeping.
+        dl->PushClipRect(sa, ImVec2(sa.x + kSegW, sb.y), true);
+        dl->AddRectFilledMultiColor(sa, sb, pal::ControlOnTop, pal::ControlOnTop,
+                                    pal::ControlOnBottom, pal::ControlOnBottom);
+        dl->AddRect(sa, sb, pal::ControlBorder, 4.0f);
+        dl->PopClipRect();
+        for (int i = 1; i < int(kSegs); ++i)
+            dl->AddLine(ImVec2(sa.x + kSegW * i, sa.y + 3.0f),
+                        ImVec2(sa.x + kSegW * i, sb.y - 3.0f),
+                        pal::ControlDivider);
+
+        for (int i = 0; i < int(kSegs); ++i) {
+            const float cx = sa.x + kSegW * i + kSegW * 0.5f;
+            const float cy2 = (sa.y + sb.y) * 0.5f;
+            const ImU32 g = i == 0 ? IM_COL32_WHITE : pal::GlyphDim;
+            switch (i) {
+                case 0:  // list
+                    for (int k = 0; k < 4; ++k)
+                        dl->AddLine(ImVec2(cx - 5, cy2 - 4.5f + k * 3),
+                                    ImVec2(cx + 5, cy2 - 4.5f + k * 3), g);
+                    break;
+                case 1:  // album list
+                    dl->AddRectFilled(ImVec2(cx - 6, cy2 - 3),
+                                      ImVec2(cx - 1, cy2 + 3), g);
+                    for (int k = 0; k < 3; ++k)
+                        dl->AddLine(ImVec2(cx + 1, cy2 - 3 + k * 3),
+                                    ImVec2(cx + 6, cy2 - 3 + k * 3), g);
+                    break;
+                case 2:  // grid
+                    for (int r = 0; r < 2; ++r)
+                        for (int c2 = 0; c2 < 2; ++c2)
+                            dl->AddRectFilled(
+                                ImVec2(cx - 5 + c2 * 6, cy2 - 5 + r * 6),
+                                ImVec2(cx - 1 + c2 * 6, cy2 - 1 + r * 6), g);
+                    break;
+                default:  // cover flow
+                    dl->AddRectFilled(ImVec2(cx - 3, cy2 - 4),
+                                      ImVec2(cx + 3, cy2 + 4), g);
+                    dl->AddRectFilled(ImVec2(cx - 7, cy2 - 3),
+                                      ImVec2(cx - 4, cy2 + 3),
+                                      pal::alpha(g, 120));
+                    dl->AddRectFilled(ImVec2(cx + 4, cy2 - 3),
+                                      ImVec2(cx + 7, cy2 + 3),
+                                      pal::alpha(g, 120));
+                    break;
+            }
+            // Real items so hover is real; 1-3 simply have no handler. Not
+            // BeginDisabled, which would kill hover — the dim glyph is the
+            // affordance.
+            ImGui::SetCursorPos(ImVec2(segX + kSegW * i,
+                                       (kToolbarHeight - kSegH) * 0.5f));
+            ImGui::PushID(i);
+            ImGui::InvisibleButton("##viewmode", ImVec2(kSegW, kSegH));
+            ImGui::PopID();
+        }
+    }
+
+    // Search box, right-aligned like iTunes. Gated on whatever library is on
+    // screen rather than on the iPod's: in Library view with no device
+    // attached — the common case — it used to vanish entirely.
+    const Library* shown = shownLibrary();
+    if (shown && w > kLcdWidth + 2.0f * (kSearchWidth + 60.0f)) {
         ImGui::SetCursorPos(
             ImVec2(w - kSearchWidth - 16.0f, (kToolbarHeight - 23.0f) * 0.5f));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 11.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 4));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(24, 4));
         ImGui::SetNextItemWidth(kSearchWidth);
+        const ImVec2 fp = ImGui::GetCursorScreenPos();
         if (ImGui::InputTextWithHint("##search", "Search", search_,
                                      sizeof(search_)))
             visibleDirty_ = true;
         ImGui::PopStyleVar(2);
+        // Magnifier, drawn into the field's left padding.
+        const float gy = fp.y + ImGui::GetItemRectSize().y * 0.5f;
+        dl->AddCircle(ImVec2(fp.x + 11.0f, gy - 1.0f), 3.5f, pal::Glyph, 12,
+                      1.3f);
+        dl->AddLine(ImVec2(fp.x + 13.5f, gy + 1.5f),
+                    ImVec2(fp.x + 16.5f, gy + 4.0f), pal::Glyph, 1.3f);
     }
 }
 
@@ -349,8 +440,9 @@ void App::drawSidebar(float height) {
                 pal::SidebarBorder);
 
     const bool haveLib = library_.has_value();
-    const float listHeight =
-        haveLib ? std::max(60.0f, height - kArtPane) : height;
+    const float listHeight = (haveLib && artworkPaneOpen_)
+                                 ? std::max(60.0f, height - kArtPane)
+                                 : height;
     ImGui::BeginChild("sidebar_list", ImVec2(kSidebarWidth, listHeight));
     dl = ImGui::GetWindowDrawList();
 
@@ -507,7 +599,7 @@ void App::drawSidebar(float height) {
 
     ImGui::EndChild();
 
-    if (haveLib) drawArtworkPane(height);
+    if (haveLib && artworkPaneOpen_) drawArtworkPane(height);
 
     ImGui::EndChild();
     ImGui::PopStyleColor();
@@ -862,7 +954,23 @@ void App::drawTrackTable() {
         dl->AddLine(ImVec2(p.x, p.y + h - 0.5f), ImVec2(p.x + w, p.y + h - 0.5f),
                     pal::HeaderBorder);
     }
-    ImGui::TableHeadersRow();
+    // Submitted by hand rather than with TableHeadersRow() so the sorted
+    // column's header can carry the blue iTunes 10 wore. TableHeader() still
+    // provides the sort click and the right-click column menu.
+    ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+    for (int c = 0; c < ImGui::TableGetColumnCount(); ++c) {
+        if (!ImGui::TableSetColumnIndex(c)) continue;
+        if (ImGui::TableGetColumnFlags(c) & ImGuiTableColumnFlags_IsSorted) {
+            const ImVec2 cmn = ImGui::GetCursorScreenPos();
+            const float cw = ImGui::GetContentRegionAvail().x;
+            const float ch = ImGui::GetFrameHeight();
+            ImGui::GetWindowDrawList()->AddRectFilledMultiColor(
+                ImVec2(cmn.x - 4.0f, cmn.y), ImVec2(cmn.x + cw + 4.0f, cmn.y + ch),
+                pal::HeaderSortTop, pal::HeaderSortTop, pal::HeaderSortBottom,
+                pal::HeaderSortBottom);
+        }
+        ImGui::TableHeader(ImGui::TableGetColumnName(c));
+    }
 
     if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs()) {
         if (specs->SpecsDirty) {
@@ -905,6 +1013,12 @@ void App::drawTrackTable() {
             const bool selected = isSelected(t.id);
 
             ImGui::TableNextRow();
+            // Tint the sorted column's body too, semi-transparent so the row
+            // striping still reads through it. sortCol_ is the column's
+            // UserID, and the UserIDs are 0..7 in setup order.
+            if (!selected)
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,
+                                       pal::SortColumnTint, sortCol_);
             if (selected)
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
 
@@ -1080,13 +1194,102 @@ void App::drawStatusBar() {
     dl->AddLine(ImVec2(wp.x, y0 + 0.5f), ImVec2(wp.x + w, y0 + 0.5f),
                 pal::StatusBorder);
 
+    // The icon clusters iTunes 10 put at either end. All of them do something:
+    // nothing else in this app draws a control that does not.
+    const float iy = y0 + kStatusBarHeight * 0.5f;
+    const float statusTop = ImGui::GetWindowHeight() - kStatusBarHeight;
+    float ix = 8.0f;
+    // `hot` reports hover; the caller draws, so the glyph can react.
+    auto slot = [&](const char* id, bool enabled) {
+        ImGui::SetCursorPos(ImVec2(ix, statusTop + 4.0f));
+        ImGui::PushID(id);
+        ImGui::BeginDisabled(!enabled);
+        const bool clicked = ImGui::InvisibleButton("##i", ImVec2(16, 16));
+        ImGui::EndDisabled();
+        ImGui::PopID();
+        ix += 22.0f;
+        return clicked;
+    };
+    auto glyphCol = [](bool enabled, bool on) {
+        if (!enabled) return pal::GlyphDim;
+        if (on) return pal::GlyphOn;
+        return ImGui::IsItemHovered() ? pal::GlyphHot : pal::Glyph;
+    };
+
+    // New playlist. Playlists live on the device, so nothing to add to without
+    // one we can write.
+    {
+        const float gx = wp.x + ix + 8.0f;
+        const bool on = library_ && writesSupported();
+        if (slot("newpl", on)) createPlaylist(0);
+        const ImU32 c = glyphCol(on, false);
+        dl->AddRectFilled(ImVec2(gx - 5, iy - 1), ImVec2(gx + 5, iy + 1), c);
+        dl->AddRectFilled(ImVec2(gx - 1, iy - 5), ImVec2(gx + 1, iy + 5), c);
+    }
+    // Shuffle: two crossing arrows.
+    {
+        const float gx = wp.x + ix + 8.0f;
+        if (slot("shuffle", true)) shuffle_ = !shuffle_;
+        const ImU32 c = glyphCol(true, shuffle_);
+        dl->AddLine(ImVec2(gx - 6, iy - 4), ImVec2(gx + 6, iy + 4), c, 1.4f);
+        dl->AddLine(ImVec2(gx - 6, iy + 4), ImVec2(gx + 6, iy - 4), c, 1.4f);
+        dl->AddTriangleFilled(ImVec2(gx + 3, iy - 6), ImVec2(gx + 7, iy - 4),
+                              ImVec2(gx + 3, iy - 2), c);
+        dl->AddTriangleFilled(ImVec2(gx + 3, iy + 2), ImVec2(gx + 7, iy + 4),
+                              ImVec2(gx + 3, iy + 6), c);
+    }
+    // Repeat: a loop, with a "1" when it repeats one track.
+    {
+        const float gx = wp.x + ix + 8.0f;
+        if (slot("repeat", true))
+            repeat_ = repeat_ == Repeat::Off  ? Repeat::All
+                      : repeat_ == Repeat::All ? Repeat::One
+                                               : Repeat::Off;
+        const ImU32 c = glyphCol(true, repeat_ != Repeat::Off);
+        dl->AddRect(ImVec2(gx - 6, iy - 4), ImVec2(gx + 6, iy + 4), c, 3.0f, 0,
+                    1.4f);
+        dl->AddTriangleFilled(ImVec2(gx + 1, iy - 7), ImVec2(gx + 5, iy - 4),
+                              ImVec2(gx + 1, iy - 1), c);
+        if (repeat_ == Repeat::One)
+            dl->AddText(fonts_.label, fonts_.labelSize,
+                        ImVec2(gx - 2.0f, iy - 6.0f), c, "1");
+    }
+    // Show/hide the Now Playing artwork well in the sidebar.
+    {
+        const float gx = wp.x + ix + 8.0f;
+        if (slot("artwork", true)) artworkPaneOpen_ = !artworkPaneOpen_;
+        const ImU32 c = glyphCol(true, artworkPaneOpen_);
+        dl->AddRect(ImVec2(gx - 6, iy - 6), ImVec2(gx + 6, iy + 6), c, 1.0f, 0,
+                    1.3f);
+        dl->AddLine(ImVec2(gx - 6, iy + 3), ImVec2(gx - 1, iy - 2), c, 1.3f);
+        dl->AddLine(ImVec2(gx - 1, iy - 2), ImVec2(gx + 6, iy + 5), c, 1.3f);
+        dl->AddCircleFilled(ImVec2(gx + 2.5f, iy - 3.0f), 1.6f, c, 8);
+    }
+    const float leftEdge = ix;
+
+    // Eject, at the right end, only when there is something to eject.
+    float rightEdge = w - 8.0f;
     const auto& dev = watcher_.device();
+    if (dev) {
+        rightEdge -= 16.0f;
+        ImGui::SetCursorPos(ImVec2(rightEdge, statusTop + 4.0f));
+        if (ImGui::InvisibleButton("##ejectstatus", ImVec2(16, 16)))
+            ejectRequested_ = true;
+        const ImU32 c = ImGui::IsItemHovered() ? pal::GlyphHot : pal::Glyph;
+        const float gx = wp.x + rightEdge + 8.0f;
+        dl->AddTriangleFilled(ImVec2(gx - 5, iy + 1), ImVec2(gx + 5, iy + 1),
+                              ImVec2(gx, iy - 5), c);
+        dl->AddRectFilled(ImVec2(gx - 5, iy + 3), ImVec2(gx + 5, iy + 6), c);
+    }
+
+    // Whatever is left between the two clusters belongs to the label.
+    const float textCentre = wp.x + (leftEdge + rightEdge) * 0.5f;
+
     std::string text;
     if (!statusMsg_.empty() && ImGui::GetTime() < statusMsgUntil_) {
         text = statusMsg_;
         addTextCentered(dl, fonts_.label, fonts_.labelSize,
-                        ImVec2(wp.x + w * 0.5f, y0 + kStatusBarHeight * 0.5f),
-                        pal::StatusText, text.c_str());
+                        ImVec2(textCentre, iy), pal::StatusText, text.c_str());
         return;
     }
     const Library* shown = shownLibrary();
@@ -1111,8 +1314,7 @@ void App::drawStatusBar() {
     } else {
         text = "No iPod connected";
     }
-    addTextCentered(dl, fonts_.label, fonts_.labelSize,
-                    ImVec2(wp.x + w * 0.5f, y0 + kStatusBarHeight * 0.5f),
+    addTextCentered(dl, fonts_.label, fonts_.labelSize, ImVec2(textCentre, iy),
                     pal::StatusText, text.c_str());
 }
 }  // namespace podbox
