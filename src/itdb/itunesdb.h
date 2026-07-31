@@ -8,6 +8,19 @@
 
 namespace podbox {
 
+// Values of Library::hashingScheme, read from the database header. Anything
+// but None means the device checks a signature over its database and will
+// show an empty library if it does not match.
+//
+// hash58 is implemented (see itdb/hash58.h). hash72 and hashAB are not:
+// hashAB in particular was only ever added to libgpod through a separate
+// external module rather than in-tree, so it is not reverse-engineered in the
+// openly published way hash58 is.
+inline constexpr std::uint16_t kChecksumNone = 0;
+inline constexpr std::uint16_t kChecksumHash58 = 1;
+inline constexpr std::uint16_t kChecksumHash72 = 2;
+inline constexpr std::uint16_t kChecksumHashAB = 3;
+
 // Track::mediaType. The iPod files a track by this and plays it accordingly:
 // audiobooks are kept out of shuffle and resume where you left off. The values
 // are a bit field in the database, but a track carries exactly one.

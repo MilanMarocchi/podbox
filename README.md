@@ -124,13 +124,17 @@ itdb_dump --check-hash58 /Volumes/IPOD/iPod_Control/iTunes/iTunesDB <FireWireGUI
 
 The GUID is in `iPod_Control/Device/SysInfoExtended`, under `FireWireGUID`.
 
-**hash72** (nano 6G/7G) is not implemented, and those devices stay read-only.
+**hash72** and **hashAB** are not implemented, and devices using them stay
+read-only. hashAB in particular was only ever added to libgpod through a
+separate external module rather than in-tree, so unlike hash58 there is no
+openly published description of it to work from. The device pane names
+whichever scheme your iPod declares, so you can tell which case you are in.
 
 | Model | Read | Write |
 |---|---|---|
 | iPod 1st–5.5th gen, mini, photo, nano 1G/2G | ✅ | ✅ |
 | iPod classic (6G/7G), nano 3G–5G | ✅ | ⚠️ *hash58*, self-verified on connect |
-| iPod nano 6G/7G | ✅ | ⛔ needs *hash72* |
+| Later models signing with *hash72* or *hashAB* | ✅ | ⛔ read-only |
 | iPod shuffle | — | — separate `iTunesSD` format (planned) |
 | iPod touch / iPhone | — | — different sync protocol, out of scope |
 

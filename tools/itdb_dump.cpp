@@ -42,6 +42,18 @@ int checkHash58(const char* dbPath, const char* guidStr) {
         return s;
     };
 
+    // Worth saying plainly: a database signed with a different scheme will
+    // never match, however correct the hash58 code is.
+    if (db.size() >= 0x72) {
+        const std::uint16_t scheme =
+            std::uint16_t(db[0x70] | (db[0x71] << 8));
+        if (scheme != podbox::kChecksumHash58)
+            std::printf(
+                "note: this database declares hashing scheme %u, not hash58 "
+                "(1).\n      A mismatch below says nothing about hash58.\n\n",
+                scheme);
+    }
+
     const std::vector<std::uint8_t> stored = podbox::storedHash58(db);
     const std::vector<std::uint8_t> computed =
         podbox::hash58OfDatabase(db, guid);

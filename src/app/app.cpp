@@ -256,16 +256,16 @@ std::vector<fs::path> App::availableBackups() const {
 
 bool App::writesSupported() const {
     if (!library_) return false;
-    if (library_->hashingScheme == 0) return true;
+    if (library_->hashingScheme == kChecksumNone) return true;
     // hash58 devices become writable only once we have shown we can reproduce
-    // the checksum they already carry.
-    return library_->hashingScheme == 1 && hash58Verified_;
+    // the checksum they already carry. hash72 and hashAB stay read-only.
+    return library_->hashingScheme == kChecksumHash58 && hash58Verified_;
 }
 
 void App::verifyHash58() {
     hash58Verified_ = false;
     hash58Guid_.clear();
-    if (!library_ || library_->hashingScheme != 1) return;
+    if (!library_ || library_->hashingScheme != kChecksumHash58) return;
 
     const auto& dev = watcher_.device();
     if (!dev) return;
@@ -316,7 +316,8 @@ bool App::writeDatabase() {
     const fs::path tmp = dbPath.string() + ".podbox-tmp";
     std::string err;
     WriteOptions opts;
-    if (library_->hashingScheme == 1) opts.hash58Guid = hash58Guid_;
+    if (library_->hashingScheme == kChecksumHash58)
+        opts.hash58Guid = hash58Guid_;
     if (!writeItunesDb(*library_, tmp, &err, opts)) {
         setStatus(err);
         return false;
