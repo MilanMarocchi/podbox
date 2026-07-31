@@ -917,40 +917,44 @@ void App::drawRestoreModal() {
 void App::drawDeletePlaylistModal() {
     if (deletePlaylistIndex_ >= 0 && !ImGui::IsPopupOpen("Delete Playlist"))
         ImGui::OpenPopup("Delete Playlist");
-    if (!ImGui::BeginPopupModal("Delete Playlist", nullptr,
-                                ImGuiWindowFlags_AlwaysAutoResize))
-        return;
+    if (!aqua::beginSheet("Delete Playlist", 460.0f)) return;
+
     if (!library_ || deletePlaylistIndex_ < 0 ||
         deletePlaylistIndex_ >= int(library_->playlists.size())) {
         deletePlaylistIndex_ = -2;
         ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
+        aqua::endSheet();
         return;
     }
-    ImGui::Text("Delete the playlist “%s”?",
-                library_->playlists[deletePlaylistIndex_].name.c_str());
-    ImGui::TextDisabled("The songs stay on the iPod; only the playlist is removed.");
-    ImGui::Spacing();
-    if (ImGui::Button("Delete", ImVec2(90, 0))) {
+
+    aqua::heading(fonts_,
+                  ("Are you sure you want to delete the playlist \u201c" +
+                   library_->playlists[deletePlaylistIndex_].name +
+                   "\u201d?")
+                      .c_str());
+    aqua::body(fonts_,
+               "The songs stay on the iPod; only the playlist is removed.");
+
+    aqua::divider();
+    aqua::rightAlignButtons(2, 92.0f);
+    if (aqua::button("Cancel", ImVec2(92, 0))) {
+        deletePlaylistIndex_ = -2;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (aqua::button("Delete", ImVec2(92, 0), true)) {
         const int idx = deletePlaylistIndex_;
         deletePlaylistIndex_ = -2;
         library_->playlists.erase(library_->playlists.begin() + idx);
-        if (view_ == View::Playlist && playlistIndex_ == idx) {
-            view_ = View::Music;
-            playlistIndex_ = -1;
-        } else if (playlistIndex_ > idx) {
+        if (view_ == View::Playlist && playlistIndex_ == idx)
+            switchSource(View::Music);
+        else if (playlistIndex_ > idx)
             --playlistIndex_;
-        }
         visibleDirty_ = true;
         ImGui::CloseCurrentPopup();
         if (writeDatabase()) setStatus("Deleted playlist");
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(90, 0))) {
-        deletePlaylistIndex_ = -2;
-        ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
+    aqua::endSheet();
 }
 
 void App::trackContextMenu(const Track& t) {

@@ -398,12 +398,7 @@ void App::drawSidebar(float height) {
         const std::string label =
             "Music  (" + std::to_string(host_.tracks().size()) + ")";
         if (row("hostlib", label, 28.0f, view_ == View::Library)) {
-            view_ = View::Library;
-            playlistIndex_ = -1;
-            selectedTrackId_ = 0;
-            selection_.clear();
-            selectionAnchor_ = 0;
-            visibleDirty_ = true;
+            switchSource(View::Library);
         }
     }
     ImGui::SetCursorPosX(10);
@@ -445,12 +440,7 @@ void App::drawSidebar(float height) {
         drawIpodIcon(dl, ImVec2(iconPos.x + 10, iconPos.y + 1));
         if (library_) {
             if (row("music", "Music", 28.0f, view_ == View::Music)) {
-                view_ = View::Music;
-                playlistIndex_ = -1;
-                selectedTrackId_ = 0;
-                selection_.clear();
-                selectionAnchor_ = 0;
-                visibleDirty_ = true;
+                switchSource(View::Music);
             }
         }
     } else {
@@ -488,12 +478,7 @@ void App::drawSidebar(float height) {
             }
             const std::string id = "pl" + std::to_string(i);
             if (row(id.c_str(), library_->playlists[i].name, 20.0f, selected)) {
-                view_ = View::Playlist;
-                playlistIndex_ = i;
-                selectedTrackId_ = 0;
-                selection_.clear();
-                selectionAnchor_ = 0;
-                visibleDirty_ = true;
+                switchSource(View::Playlist, i);
             }
             if (ImGui::BeginPopupContextItem(
                     ("plctx" + std::to_string(i)).c_str())) {

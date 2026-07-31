@@ -585,12 +585,18 @@ void App::updateLibrary() {
 
     pullPlayCountsToHost();
 
-    view_ = library_ ? View::Music : View::Device;
-    playlistIndex_ = -1;
+    switchSource(library_ ? View::Music : View::Device);
+    // A new device means the cached artwork texture describes a track that no
+    // longer exists; only this path needs to say so.
+    artTrackId_ = 0;
+}
+
+void App::switchSource(View view, int playlistIndex) {
+    view_ = view;
+    playlistIndex_ = playlistIndex;
     selectedTrackId_ = 0;
     selection_.clear();
     selectionAnchor_ = 0;
-    artTrackId_ = 0;
     visibleDirty_ = true;
 }
 

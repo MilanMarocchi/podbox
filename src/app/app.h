@@ -48,6 +48,10 @@ private:
     enum class View { Device, Music, Playlist, Library };
 
     void updateLibrary();
+    // Point the main panel at a different source. Selection is per-source, so
+    // switching always clears it — four copies of this used to drift apart.
+    // `playlistIndex` is only meaningful for View::Playlist.
+    void switchSource(View view, int playlistIndex = -1);
     // The tracks currently on screen, and their id index — the Mac library's
     // or the iPod's. Everything that merely displays tracks goes through
     // these so one table serves both. Null when nothing is loaded.
