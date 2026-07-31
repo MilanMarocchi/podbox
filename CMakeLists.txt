@@ -31,9 +31,11 @@ FetchContent_Declare(taglib
   GIT_TAG v1.13.1
   GIT_SHALLOW TRUE)
 
+# stb has no releases, so it is pinned by commit: without a GIT_TAG the build
+# tracks whatever master happens to be that day and stops being reproducible.
 FetchContent_Declare(stb
   GIT_REPOSITORY https://github.com/nothings/stb.git
-  GIT_SHALLOW TRUE)
+  GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4)
 
 FetchContent_MakeAvailable(glfw imgui taglib stb)
 
@@ -160,3 +162,27 @@ elseif(UNIX)
   find_package(OpenGL REQUIRED)
   target_link_libraries(podbox PRIVATE OpenGL::GL)
 endif()
+
+# Installation. A .app goes to Applications/ so `nix profile install` and
+# `cmake --install` both drop something Finder can launch; elsewhere it is an
+# ordinary binary. The command-line tools are developer aids, so they are only
+# installed when asked for.
+include(GNUInstallDirs)
+option(PODBOX_INSTALL_TOOLS "Install the command-line test tools" OFF)
+
+if(APPLE)
+  install(TARGETS podbox BUNDLE DESTINATION Applications)
+else()
+  install(TARGETS podbox RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+if(PODBOX_INSTALL_TOOLS)
+  install(TARGETS itdb_dump podbox_add playcounts_test dedupe_test
+                  library_test applemusic_test sync_test
+          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+# `dedupe_test` is the only tool that asserts rather than just printing, so it
+# is the one worth wiring into CTest. Run with: ctest --test-dir build
+enable_testing()
+add_test(NAME dedupe COMMAND dedupe_test)
