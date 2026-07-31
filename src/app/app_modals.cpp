@@ -126,7 +126,7 @@ void App::drawFoldersModal() {
         std::error_code ec;
         const bool exists = std::filesystem::is_directory(w.path, ec);
         ImGui::TextColored(
-            exists ? v4(pal::rgb(30, 30, 30)) : v4(pal::rgb(150, 90, 20)), "%s",
+            exists ? v4(pal::Text) : v4(pal::Warning), "%s",
             w.path.c_str());
         ImGui::PushFont(fonts_.label);
         ImGui::TextColored(v4(pal::TextDim), "        %s",
@@ -147,7 +147,7 @@ void App::drawFoldersModal() {
         if (t.missing) ++missing;
     if (missing > 0) {
         ImGui::Spacing();
-        ImGui::TextColored(v4(pal::rgb(160, 60, 20)),
+        ImGui::TextColored(v4(pal::Warning),
                            "%s in the library no longer exist on disk.",
                            plural(missing, "song", "songs").c_str());
         ImGui::SameLine();
@@ -312,7 +312,7 @@ void App::drawAppleMusicModal() {
     }
 
     if (!apple_.read.error.empty()) {
-        ImGui::TextColored(v4(pal::rgb(160, 40, 40)), "%s",
+        ImGui::TextColored(v4(pal::Danger), "%s",
                            apple_.read.error.c_str());
         ImGui::Spacing();
         aqua::rightAlignButtons(2, 92.0f);
@@ -593,7 +593,7 @@ void App::drawSyncModal() {
         syncUi_.confirmRemove = false;
     }
     if (syncUi_.options.removeFromDevice) {
-        ImGui::TextColored(v4(pal::rgb(160, 60, 20)),
+        ImGui::TextColored(v4(pal::Warning),
                            "This deletes %s from the iPod, freeing %s.",
                            plural(int(syncUi_.plan.toRemove.size()), "song",
                                   "songs")
@@ -602,7 +602,7 @@ void App::drawSyncModal() {
         // Every song queued for removal is one the Mac has no copy of, so
         // this is the only step in a sync that destroys music outright.
         if (syncUi_.plan.deviceOnly > 0)
-            ImGui::TextColored(v4(pal::rgb(170, 30, 30)),
+            ImGui::TextColored(v4(pal::Danger),
                                "%s exist only on the iPod — deleting them "
                                "loses them for good.",
                                plural(syncUi_.plan.deviceOnly, "song", "songs")
@@ -623,7 +623,7 @@ void App::drawSyncModal() {
                 : 0;
         fits = after <= dev->freeBytes;
         if (!fits)
-            ImGui::TextColored(v4(pal::rgb(160, 40, 40)),
+            ImGui::TextColored(v4(pal::Danger),
                                "Not enough room — needs %s more.",
                                formatBytes(after - dev->freeBytes).c_str());
     }
@@ -784,7 +784,7 @@ void App::drawDuplicatesModal() {
                 if (it == trackIndexById_.end()) continue;
                 const Track& t = library_->tracks[it->second];
                 ImGui::TextColored(
-                    k == 0 ? v4(pal::rgb(20, 110, 30)) : v4(pal::TextDim),
+                    k == 0 ? v4(pal::Success) : v4(pal::TextDim),
                     "%s  %s  %u kbps  %s  %u plays", k == 0 ? "keep" : "  ✕ ",
                     formatDuration(t.lengthMs).c_str(), t.bitrate,
                     t.location.c_str(), t.playCount);
@@ -967,7 +967,7 @@ void App::trackContextMenu(const Track& t) {
     // iPod every one of them ends in a database write, so they are unavailable
     // when that write would be refused.
     const bool canEdit = viewingHost() || writesSupported();
-    ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::rgb(30, 30, 30)));
+    ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::Text));
 
     if (ImGui::MenuItem("Play")) playTrackId(t.id);
     ImGui::BeginDisabled(!canEdit);

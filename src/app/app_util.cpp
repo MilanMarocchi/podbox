@@ -32,8 +32,8 @@ int drawStars(ImDrawList* dl, ImVec2 p, std::uint8_t rating, bool hovered,
         const bool preview =
             hovered && mouse.x >= p.x && mouse.x < p.x + kStep * 5 &&
             mouse.x >= c.x - kR;
-        const ImU32 col = (on || preview) ? pal::rgb(70, 110, 190)
-                                          : pal::rgb(200, 202, 206);
+        const ImU32 col = (on || preview) ? pal::StarOn
+                                          : pal::StarOff;
         dl->AddCircleFilled(c, on || preview ? kR * 0.62f : kR * 0.34f, col, 8);
         if (clicked && hovered && mouse.x >= c.x - kR && mouse.x < c.x + kR)
             result = (i + 1) * 20;
@@ -46,13 +46,13 @@ int drawStars(ImDrawList* dl, ImVec2 p, std::uint8_t rating, bool hovered,
 
 void drawIpodIcon(ImDrawList* dl, ImVec2 p) {
     const float w = 11.0f, h = 16.0f;
-    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), pal::rgb(250, 250, 250),
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), pal::ControlTop,
                       2.5f);
-    dl->AddRect(p, ImVec2(p.x + w, p.y + h), pal::rgb(110, 116, 124), 2.5f);
+    dl->AddRect(p, ImVec2(p.x + w, p.y + h), pal::Glyph, 2.5f);
     dl->AddRectFilled(ImVec2(p.x + 2, p.y + 2), ImVec2(p.x + w - 2, p.y + 7),
-                      pal::rgb(120, 150, 200), 1.0f);
+                      pal::CapacityFill, 1.0f);
     dl->AddCircle(ImVec2(p.x + w * 0.5f, p.y + 11.5f), 2.6f,
-                  pal::rgb(150, 155, 160));
+                  pal::ControlBorder);
 }
 
 bool containsCi(const std::string& haystack, const std::string& lowerNeedle) {

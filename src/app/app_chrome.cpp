@@ -70,7 +70,7 @@ void App::drawArtworkPane(float sidebarHeight) {
 
     const float box = 120.0f;
     const ImVec2 p(wp.x + (kSidebarWidth - box) * 0.5f, top + 14.0f);
-    dl->AddRectFilled(p, ImVec2(p.x + box, p.y + box), pal::rgb(255, 255, 255),
+    dl->AddRectFilled(p, ImVec2(p.x + box, p.y + box), pal::ArtworkWell,
                       2.0f);
     if (art_.hasImage && art_.texture) {
         dl->AddImage((ImTextureID)(intptr_t)art_.texture, p,
@@ -79,10 +79,10 @@ void App::drawArtworkPane(float sidebarHeight) {
         // Empty "no artwork" well, like iTunes' placeholder note glyph.
         addTextCentered(dl, fonts_.label, fonts_.labelSize,
                         ImVec2(p.x + box * 0.5f, p.y + box * 0.5f),
-                        pal::rgb(170, 176, 184),
+                        pal::TextDim,
                         selectedTrackId_ ? "No artwork" : "");
     }
-    dl->AddRect(p, ImVec2(p.x + box, p.y + box), pal::rgb(168, 174, 182), 2.0f);
+    dl->AddRect(p, ImVec2(p.x + box, p.y + box), pal::ArtworkBorder, 2.0f);
 }
 
 void App::drawTransport(float toolbarWidth) {
@@ -91,7 +91,7 @@ void App::drawTransport(float toolbarWidth) {
     const float cy = kToolbarHeight * 0.5f;
     const PlaybackState st = player_ ? player_->state() : PlaybackState::Stopped;
     const bool haveList = library_ && !visible_.empty();
-    const ImU32 glyph = haveList ? pal::rgb(60, 66, 74) : pal::rgb(178, 184, 190);
+    const ImU32 glyph = haveList ? pal::Glyph : pal::GlyphDim;
     constexpr float kPrevW = 26.0f, kPlayW = 30.0f, kNextW = 26.0f;
     constexpr float kGap = 4.0f, kStartX = 16.0f;
     float x = kStartX;
@@ -104,15 +104,15 @@ void App::drawTransport(float toolbarWidth) {
         const float w = kPrevW + kPlayW + kNextW + kGap * 2.0f;
         const ImVec2 a(wp.x + kStartX - 5.0f, wp.y + cy - 15.0f);
         const ImVec2 b(a.x + w + 10.0f, wp.y + cy + 15.0f);
-        aqua::gradientRect(dl, a, b, pal::rgb(252, 252, 253),
-                           pal::rgb(214, 217, 221), pal::rgb(150, 154, 160),
+        aqua::gradientRect(dl, a, b, pal::ControlTop,
+                           pal::ControlBottom, pal::ControlBorder,
                            15.0f);
         // Hairlines separating the three, as on the real control.
         for (float sx : {kStartX + kPrevW + kGap * 0.5f,
                          kStartX + kPrevW + kGap + kPlayW + kGap * 0.5f})
             dl->AddLine(ImVec2(wp.x + sx, a.y + 5.0f),
                         ImVec2(wp.x + sx, b.y - 5.0f),
-                        pal::rgb(190, 194, 199));
+                        pal::ControlDivider);
     }
 
     auto button = [&](const char* id, float w) -> ImVec2 {
@@ -180,20 +180,20 @@ void App::drawTransport(float toolbarWidth) {
     const float tx0 = vmn.x + 16.0f, tx1 = vmx.x;
     // Speaker.
     dl->AddRectFilled(ImVec2(vmn.x, ty - 3), ImVec2(vmn.x + 4, ty + 3),
-                      pal::rgb(120, 126, 134));
+                      pal::Glyph);
     dl->AddTriangleFilled(ImVec2(vmn.x + 4, ty - 5), ImVec2(vmn.x + 4, ty + 5),
-                          ImVec2(vmn.x + 9, ty), pal::rgb(120, 126, 134));
+                          ImVec2(vmn.x + 9, ty), pal::Glyph);
     float vol = player_ ? player_->volume() : 0.0f;
     if (ImGui::IsItemActive()) {
         vol = std::clamp((ImGui::GetIO().MousePos.x - tx0) / (tx1 - tx0), 0.0f,
                          1.0f);
         if (player_) player_->setVolume(vol);
     }
-    dl->AddLine(ImVec2(tx0, ty), ImVec2(tx1, ty), pal::rgb(176, 182, 190), 2.0f);
+    dl->AddLine(ImVec2(tx0, ty), ImVec2(tx1, ty), pal::LcdProgressBg, 2.0f);
     dl->AddLine(ImVec2(tx0, ty), ImVec2(tx0 + (tx1 - tx0) * vol, ty),
-                pal::rgb(120, 140, 175), 2.0f);
+                pal::LcdProgressFill, 2.0f);
     dl->AddCircleFilled(ImVec2(tx0 + (tx1 - tx0) * vol, ty), 5.0f,
-                        pal::rgb(88, 94, 102));
+                        pal::LcdProgressKnob);
 }
 
 void App::drawNowPlaying(ImVec2 a, ImVec2 b) {
@@ -217,11 +217,11 @@ void App::drawNowPlaying(ImVec2 a, ImVec2 b) {
     const float x0 = a.x + 46.0f, x1 = b.x - 46.0f;
     const float frac =
         dur > 0 ? float(std::clamp(pos / dur, 0.0, 1.0)) : 0.0f;
-    dl->AddLine(ImVec2(x0, y), ImVec2(x1, y), pal::rgb(185, 192, 200), 2.0f);
+    dl->AddLine(ImVec2(x0, y), ImVec2(x1, y), pal::LcdProgressBg, 2.0f);
     dl->AddLine(ImVec2(x0, y), ImVec2(x0 + (x1 - x0) * frac, y),
-                pal::rgb(84, 132, 214), 2.0f);
+                pal::LcdProgressFill, 2.0f);
     dl->AddCircleFilled(ImVec2(x0 + (x1 - x0) * frac, y), 4.5f,
-                        pal::rgb(70, 110, 180));
+                        pal::LcdProgressKnob);
 
     dl->AddText(fonts_.label, fonts_.labelSize, ImVec2(a.x + 8.0f, y - 6.0f),
                 pal::LcdTextDim,
@@ -314,7 +314,7 @@ void App::drawToolbar() {
                     float(sync_.batchDone()) / float(sync_.batchTotal());
                 const ImVec2 p0(a.x + 8, b.y - 7);
                 const ImVec2 p1(b.x - 8, b.y - 3);
-                dl->AddRectFilled(p0, p1, pal::rgb(196, 205, 212), 2.0f);
+                dl->AddRectFilled(p0, p1, pal::LcdProgressBg, 2.0f);
                 dl->AddRectFilled(
                     p0,
                     ImVec2(p0.x + std::max(4.0f, (p1.x - p0.x) * frac), p1.y),
@@ -379,14 +379,14 @@ void App::drawSidebar(float height) {
             // Repaint the flat fill as the gradient the source list used.
             const ImVec2 mn = ImGui::GetItemRectMin();
             const ImVec2 mx = ImGui::GetItemRectMax();
-            dl->AddRectFilledMultiColor(mn, mx, pal::rgb(116, 162, 226),
-                                        pal::rgb(116, 162, 226),
-                                        pal::rgb(50, 108, 200),
-                                        pal::rgb(50, 108, 200));
-            dl->AddLine(mn, ImVec2(mx.x, mn.y), pal::rgb(150, 186, 236));
+            dl->AddRectFilledMultiColor(mn, mx, pal::SelectionTop,
+                                        pal::SelectionTop,
+                                        pal::SelectionBottom,
+                                        pal::SelectionBottom);
+            dl->AddLine(mn, ImVec2(mx.x, mn.y), pal::SelectionEdge);
         }
         dl->AddText(fonts_.ui, fonts_.uiSize, ImVec2(pos.x + indent, pos.y + 2),
-                    selected ? IM_COL32_WHITE : pal::rgb(30, 30, 30),
+                    selected ? IM_COL32_WHITE : pal::Text,
                     text.c_str());
         return clicked;
     };
@@ -429,9 +429,9 @@ void App::drawSidebar(float height) {
         const ImVec2 em = ImGui::GetItemRectMin();
         const float ejx = em.x + 8.0f, ejy = em.y + 4.0f;
         const ImU32 ejCol = ImGui::IsItemHovered()
-                                ? pal::rgb(40, 90, 200)
+                                ? pal::GlyphOn
                                 : (devSelected ? IM_COL32_WHITE
-                                               : pal::rgb(90, 98, 108));
+                                               : pal::Glyph);
         dl->AddTriangleFilled(ImVec2(ejx, ejy + 6), ImVec2(ejx + 10, ejy + 6),
                               ImVec2(ejx + 5, ejy), ejCol);
         dl->AddRectFilled(ImVec2(ejx, ejy + 8), ImVec2(ejx + 10, ejy + 11),
@@ -482,7 +482,7 @@ void App::drawSidebar(float height) {
             }
             if (ImGui::BeginPopupContextItem(
                     ("plctx" + std::to_string(i)).c_str())) {
-                ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::rgb(30, 30, 30)));
+                ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::Text));
                 ImGui::BeginDisabled(!writesSupported());
                 if (ImGui::MenuItem("Rename")) {
                     plEdit_.renameIndex = i;
@@ -498,7 +498,7 @@ void App::drawSidebar(float height) {
         }
         ImGui::Dummy(ImVec2(0, 4));
         ImGui::SetCursorPosX(18);
-        ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::rgb(70, 80, 92)));
+        ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::TextDim));
         ImGui::BeginDisabled(!writesSupported());
         if (ImGui::SmallButton("+ New Playlist")) createPlaylist(0);
         ImGui::EndDisabled();
@@ -674,12 +674,12 @@ void App::drawDeviceView(const IpodInfo& dev) {
     ImGui::EndDisabled();
     ImGui::PushFont(fonts_.label);
     if (!writesSupported())
-        ImGui::TextColored(v4(pal::rgb(150, 90, 20)),
+        ImGui::TextColored(v4(pal::Warning),
                            "This iPod's database carries a checksum PodBox "
                            "cannot produce yet, so it is read-only here. "
                            "Nothing on the device will be changed.");
     else if (appleMusicSyncing())
-        ImGui::TextColored(v4(pal::rgb(150, 90, 20)),
+        ImGui::TextColored(v4(pal::Warning),
                            "Apple Music is syncing this iPod right now — "
                            "PodBox will not write until it finishes.");
     else
@@ -724,12 +724,12 @@ void App::drawTrackTable() {
         const float w = ImGui::GetContentRegionAvail().x;
         const float h = ImGui::GetFrameHeight();
         dl->AddRectFilledMultiColor(p, ImVec2(p.x + w, p.y + h),
-                                    pal::rgb(250, 250, 251),
-                                    pal::rgb(250, 250, 251),
-                                    pal::rgb(226, 228, 232),
-                                    pal::rgb(226, 228, 232));
+                                    pal::HeaderTop,
+                                    pal::HeaderTop,
+                                    pal::HeaderBottom,
+                                    pal::HeaderBottom);
         dl->AddLine(ImVec2(p.x, p.y + h - 0.5f), ImVec2(p.x + w, p.y + h - 0.5f),
-                    pal::rgb(168, 173, 180));
+                    pal::HeaderBorder);
     }
     ImGui::TableHeadersRow();
 

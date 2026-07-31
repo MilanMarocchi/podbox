@@ -56,17 +56,17 @@ bool button(const char* label, ImVec2 size, bool isDefault) {
     ImU32 top, bottom, border, fg;
     if (isDefault) {
         // Aqua's default button: saturated blue, white label.
-        top = held ? pal::rgb(60, 108, 190) : pal::rgb(126, 174, 235);
-        bottom = held ? pal::rgb(38, 78, 155) : pal::rgb(56, 116, 205);
-        border = pal::rgb(45, 84, 148);
+        top = held ? pal::rgb(60, 108, 190) : pal::DefaultBtnTop;
+        bottom = held ? pal::rgb(38, 78, 155) : pal::DefaultBtnBottom;
+        border = pal::DefaultBtnBorder;
         fg = IM_COL32_WHITE;
     } else {
         top = held ? pal::rgb(222, 222, 222) : IM_COL32_WHITE;
-        bottom = held ? pal::rgb(198, 198, 198) : pal::rgb(226, 226, 226);
-        border = pal::rgb(150, 152, 156);
-        fg = pal::rgb(20, 20, 20);
+        bottom = held ? pal::rgb(198, 198, 198) : pal::ControlBottom;
+        border = pal::ControlBorder;
+        fg = pal::Text;
     }
-    if (hovered && !held && !isDefault) bottom = pal::rgb(236, 236, 236);
+    if (hovered && !held && !isDefault) bottom = pal::ControlHotBottom;
 
     // Small push buttons of this era were almost capsules.
     const float r = size.y * 0.5f;
@@ -86,10 +86,10 @@ bool roundButton(const char* id, ImVec2 center, float radius, bool pressed) {
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     // Bezel, then face, then the gloss arc across the top half.
-    dl->AddCircleFilled(center, radius, pal::rgb(140, 144, 150), 32);
-    const ImU32 face = held ? pal::rgb(198, 202, 208)
-                            : (hovered ? pal::rgb(250, 250, 252)
-                                       : pal::rgb(238, 240, 243));
+    dl->AddCircleFilled(center, radius, pal::ControlBorder, 32);
+    const ImU32 face = held ? pal::ControlOnBottom
+                            : (hovered ? pal::ControlTop
+                                       : pal::ControlBottom);
     dl->AddCircleFilled(center, radius - 1.0f, face, 32);
     dl->PathArcTo(ImVec2(center.x, center.y + 1.0f), radius - 2.5f, kPi,
                   kPi * 2.0f, 16);
@@ -108,8 +108,8 @@ bool beginSheet(const char* id, float width) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 18));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, v4(pal::rgb(237, 237, 237)));
-    ImGui::PushStyleColor(ImGuiCol_Border, v4(pal::rgb(126, 129, 133)));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, v4(pal::SheetBg));
+    ImGui::PushStyleColor(ImGuiCol_Border, v4(pal::SheetBorder));
 
     const bool open = ImGui::BeginPopupModal(
         id, nullptr,
@@ -132,7 +132,7 @@ void endSheet() {
 
 void heading(const Fonts& f, const char* text) {
     ImGui::PushFont(f.uiBold);
-    ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::rgb(20, 20, 20)));
+    ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::Text));
     ImGui::TextWrapped("%s", text);
     ImGui::PopStyleColor();
     ImGui::PopFont();
@@ -146,7 +146,7 @@ void body(const Fonts& f, const char* fmt, ...) {
     va_end(args);
 
     ImGui::PushFont(f.label);
-    ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::rgb(88, 92, 98)));
+    ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::StatusText));
     ImGui::TextWrapped("%s", buf);
     ImGui::PopStyleColor();
     ImGui::PopFont();
@@ -158,7 +158,7 @@ void divider() {
     const float w = ImGui::GetContentRegionAvail().x;
     // Two hairlines: the shadow above, the highlight below.
     dl->AddLine(ImVec2(p.x, p.y + 4.0f), ImVec2(p.x + w, p.y + 4.0f),
-                pal::rgb(198, 200, 203));
+                pal::GridLine);
     dl->AddLine(ImVec2(p.x, p.y + 5.0f), ImVec2(p.x + w, p.y + 5.0f),
                 withAlpha(IM_COL32_WHITE, 200));
     ImGui::Dummy(ImVec2(0, 10));
