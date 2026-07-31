@@ -1,0 +1,65 @@
+name: CI
+
+# Both build paths are exercised, because they can drift: the Nix derivation
+# pins dependency revisions of its own, and if they fall out of step with the
+# GIT_TAGs in CMakeLists the two stop building the same program.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nix:
+    name: nix build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Build
+        run: nix build .#podbox --print-build-logs
+      - name: Flake checks
+        run: nix flake check --print-build-logs
+      - name: Confirm the bundle is there
+        run: |
+          test -x result/Applications/PodBox.app/Contents/MacOS/PodBox
+          test -f result/Applications/PodBox.app/Contents/Info.plist
+
+  cmake:
+    name: cmake build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  reproducible:
+    name: reproducible build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Build twice and compare
+        # --rebuild rebuilds and diffs against what is already in the store, so
+        # this fails if anything nondeterministic creeps back in. The last thing
+        # to do so was LC_UUID, via the build directory leaking through -g.
+        run: |
+          nix build .#podbox --print-build-logs
+          nix build .#podbox --rebuild --print-build-logs

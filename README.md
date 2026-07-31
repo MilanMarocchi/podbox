@@ -4,7 +4,7 @@ A standalone iPod manager for macOS — manage the music library on a classic
 iPod the way the old iTunes and apps like PodCenter let you: **drag songs on,
 delete songs off, build playlists — no full-library sync, no iTunes
 required.** Built in C++ with [Dear ImGui](https://github.com/ocornut/imgui),
-styled after iTunes 7–9.
+styled after iTunes 10.
 
 ![PodBox](docs/screenshot.png)
 
@@ -13,8 +13,13 @@ styled after iTunes 7–9.
 ### On the iPod
 
 - **Browse** the iPod's library in a sortable, searchable track list, plus its
-  playlists — in a faithful iTunes 7–9 look (Lucida Grande, source-list
-  sidebar, brushed-metal toolbar with an "LCD" readout, capacity bar).
+  playlists — in a faithful iTunes 10 look (Lucida Grande, source-list sidebar,
+  toolbar with an "LCD" readout, capacity bar).
+- **Narrow by genre, artist and album** with the column browser above the track
+  list. Picking a genre narrows the artists and albums beside it, and the track
+  list below; the search box narrows all three. Drag its bottom edge to resize.
+- **Shuffle and repeat**, from the buttons at the bottom left, alongside a
+  toggle for the Now Playing artwork well.
 - **Add songs** by dragging files or folders onto the window. Metadata is read
   with TagLib and files are copied into the iPod's music folders with
   iTunes-style scrambled names. Copies run on a background thread with progress
