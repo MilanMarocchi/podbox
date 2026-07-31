@@ -33,21 +33,32 @@ namespace fs = std::filesystem;
 namespace podbox {
 
 void App::updateArtwork() {
-    const Library* shown = shownLibrary();
-    const auto* index = shownIndex();
-    if (!shown || !index || selectedTrackId_ == 0) {
+    // This is the Now Playing well, so it follows what is playing and falls
+    // back to the selection when nothing is — it used to track the selection
+    // alone, so starting a song left the previous cover on screen.
+    const Track* track = playingTrack();
+    std::uint32_t want = playingTrackId_;
+    if (!track) {
+        const Library* shown = shownLibrary();
+        const auto* index = shownIndex();
+        if (shown && index && selectedTrackId_) {
+            const auto it = index->find(selectedTrackId_);
+            if (it != index->end()) {
+                track = &shown->tracks[it->second];
+                want = selectedTrackId_;
+            }
+        }
+    }
+    if (!track) {
         art_.hasImage = false;
         art_.trackId = 0;
         return;
     }
-    if (selectedTrackId_ == art_.trackId) return;  // already current
-    art_.trackId = selectedTrackId_;
+    if (want == art_.trackId) return;  // already current
+    art_.trackId = want;
     art_.hasImage = false;
 
-    const auto it = index->find(selectedTrackId_);
-    if (it == index->end()) return;
-    const fs::path file = trackFilePath(shown->tracks[it->second]);
-    const ArtImage img = loadEmbeddedArtwork(file);
+    const ArtImage img = loadEmbeddedArtwork(trackFilePath(*track));
     if (!img.ok()) return;
 
     if (art_.texture == 0) glGenTextures(1, &art_.texture);
@@ -82,7 +93,7 @@ void App::drawArtworkPane(float sidebarHeight) {
         addTextCentered(dl, fonts_.label, fonts_.labelSize,
                         ImVec2(p.x + box * 0.5f, p.y + box * 0.5f),
                         pal::TextDim,
-                        selectedTrackId_ ? "No artwork" : "");
+                        art_.trackId ? "No artwork" : "");
     }
     dl->AddRect(p, ImVec2(p.x + box, p.y + box), pal::ArtworkBorder, 2.0f);
 }
@@ -91,7 +102,11 @@ void App::drawTransport() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float cy = kToolbarHeight * 0.5f;
     const PlaybackState st = player_ ? player_->state() : PlaybackState::Stopped;
-    const bool haveList = library_ && !visible_.empty();
+    // Whatever list is on screen, not the iPod's — playback works just as
+    // well from the Mac library, and gating on library_ left the transport
+    // greyed out and prev/next dead whenever no iPod was attached.
+    const Library* shownLib = shownLibrary();
+    const bool haveList = shownLib && !visible_.empty();
     const ImU32 glyph = haveList ? pal::Glyph : pal::GlyphDim;
 
     // Three separate discs, not one capsule. iTunes drew each transport button
@@ -178,7 +193,7 @@ void App::drawTransport() {
             else if (selectedTrackId_)
                 playTrackId(selectedTrackId_);
             else if (haveList)
-                playTrackId(library_->tracks[visible_[0].second].id);
+                playTrackId(shownLib->tracks[visible_[0].second].id);
         }
     }
     {
@@ -238,10 +253,9 @@ void App::drawTransport() {
 }
 
 void App::drawNowPlaying(ImVec2 a, ImVec2 b) {
-    if (!library_) return;
-    const auto it = trackIndexById_.find(playingTrackId_);
-    if (it == trackIndexById_.end()) return;
-    const Track& t = library_->tracks[it->second];
+    const Track* track = playingTrack();
+    if (!track) return;
+    const Track& t = *track;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     // Song titles are arbitrarily long and this well is 360px wide, so both
     // lines are fitted to the space between the LCD's own buttons rather than
@@ -306,15 +320,6 @@ void App::drawToolbar() {
                 IM_COL32(255, 255, 255, 90));
     dl->AddLine(ImVec2(p.x, br.y - 0.5f), ImVec2(br.x, br.y - 0.5f),
                 pal::ToolbarBorder);
-
-    // The toolbar is the title bar now, so there is nothing left to grab:
-    // dragging empty space in it moves the window. Submitted before the
-    // controls, so they take the mouse ahead of it.
-    ImGui::SetCursorPos(ImVec2(kTrafficLightWidth, 0.0f));
-    ImGui::InvisibleButton(
-        "##windowdrag",
-        ImVec2(std::max(1.0f, w - kTrafficLightWidth), kToolbarHeight));
-    if (ImGui::IsItemActive()) dragWindowWithCurrentEvent(window_);
 
     drawTransport();
 
@@ -421,6 +426,19 @@ void App::drawToolbar() {
         dl->AddLine(ImVec2(fp.x + 13.5f, gy + 1.5f),
                     ImVec2(fp.x + 16.5f, gy + 4.0f), pal::Glyph, 1.3f);
     }
+
+    // The toolbar is the title bar now, so dragging empty space in it moves
+    // the window. Decided here, at the end, rather than with an invisible
+    // button behind the controls: a button submitted first claims the mouse on
+    // press before the volume slider has even been submitted, which is what
+    // stopped the volume working. By this point every control in the toolbar
+    // has had its turn, so a hovered id means one of them wants the click.
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const bool inToolbar = mouse.x >= p.x + kTrafficLightWidth &&
+                           mouse.x < br.x && mouse.y >= p.y && mouse.y < br.y;
+    if (inToolbar && !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive() &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        dragWindowWithCurrentEvent(window_);
 }
 
 void App::drawSidebar(float height) {
@@ -1284,58 +1302,81 @@ void App::drawStatusBar() {
         return {centre, col, clicked};
     };
 
-    // New playlist. Playlists live on the device, so there is nothing to add
-    // to without one we can write.
+    // Each icon is drawn inside the same 13x13 box around its centre, with
+    // the same 1.3px stroke, so the row reads as one set rather than four
+    // separate doodles.
+    constexpr float kStroke = 1.3f;
+
+    // New playlist: a plus.
     {
         const Icon i = icon("newpl", library_ && writesSupported(), false);
+        dl->AddLine(ImVec2(i.c.x - 5.5f, i.c.y), ImVec2(i.c.x + 5.5f, i.c.y),
+                    i.col, 1.6f);
+        dl->AddLine(ImVec2(i.c.x, i.c.y - 5.5f), ImVec2(i.c.x, i.c.y + 5.5f),
+                    i.col, 1.6f);
         if (i.clicked) createPlaylist(0);
-        dl->AddRectFilled(ImVec2(i.c.x - 5, i.c.y - 1),
-                          ImVec2(i.c.x + 5, i.c.y + 1), i.col);
-        dl->AddRectFilled(ImVec2(i.c.x - 1, i.c.y - 5),
-                          ImVec2(i.c.x + 1, i.c.y + 5), i.col);
     }
-    // Shuffle: two crossing arrows.
+    // Shuffle: two arrows crossing, each with its head on the stroke it
+    // belongs to rather than floating beside it.
     {
         const Icon i = icon("shuffle", true, shuffle_);
+        auto arrow = [&](float y0, float y1) {
+            const ImVec2 from(i.c.x - 6.5f, i.c.y + y0);
+            const ImVec2 to(i.c.x + 3.0f, i.c.y + y1);
+            dl->AddLine(from, to, i.col, kStroke);
+            // Head aligned to the stroke's direction.
+            const float dx = to.x - from.x, dy = to.y - from.y;
+            const float len = std::sqrt(dx * dx + dy * dy);
+            const float ux = dx / len, uy = dy / len;
+            const float px = -uy, py = ux;
+            const ImVec2 tip(to.x + ux * 3.5f, to.y + uy * 3.5f);
+            dl->AddTriangleFilled(
+                tip, ImVec2(to.x + px * 2.6f, to.y + py * 2.6f),
+                ImVec2(to.x - px * 2.6f, to.y - py * 2.6f), i.col);
+        };
+        arrow(-4.0f, 4.0f);
+        arrow(4.0f, -4.0f);
         if (i.clicked) shuffle_ = !shuffle_;
-        dl->AddLine(ImVec2(i.c.x - 6, i.c.y - 4), ImVec2(i.c.x + 6, i.c.y + 4),
-                    i.col, 1.4f);
-        dl->AddLine(ImVec2(i.c.x - 6, i.c.y + 4), ImVec2(i.c.x + 6, i.c.y - 4),
-                    i.col, 1.4f);
-        dl->AddTriangleFilled(ImVec2(i.c.x + 3, i.c.y - 6),
-                              ImVec2(i.c.x + 7, i.c.y - 4),
-                              ImVec2(i.c.x + 3, i.c.y - 2), i.col);
-        dl->AddTriangleFilled(ImVec2(i.c.x + 3, i.c.y + 2),
-                              ImVec2(i.c.x + 7, i.c.y + 4),
-                              ImVec2(i.c.x + 3, i.c.y + 6), i.col);
     }
-    // Repeat: a loop, with a "1" when it repeats one track.
+    // Repeat: a closed loop with the arrow head sitting on the top edge.
     {
         const Icon i = icon("repeat", true, repeat_ != Repeat::Off);
+        const float r = 4.0f, hw = 3.0f;
+        constexpr float kPi = 3.14159265f;
+        dl->PathArcTo(ImVec2(i.c.x - hw, i.c.y), r, kPi * 0.5f, kPi * 1.5f, 12);
+        dl->PathStroke(i.col, 0, kStroke);
+        dl->PathArcTo(ImVec2(i.c.x + hw, i.c.y), r, -kPi * 0.5f, kPi * 0.5f,
+                      12);
+        dl->PathStroke(i.col, 0, kStroke);
+        dl->AddLine(ImVec2(i.c.x - hw, i.c.y + r), ImVec2(i.c.x + hw, i.c.y + r),
+                    i.col, kStroke);
+        dl->AddLine(ImVec2(i.c.x - hw, i.c.y - r), ImVec2(i.c.x + 1.0f, i.c.y - r),
+                    i.col, kStroke);
+        dl->AddTriangleFilled(ImVec2(i.c.x + 1.0f, i.c.y - r - 2.6f),
+                              ImVec2(i.c.x + 1.0f, i.c.y - r + 2.6f),
+                              ImVec2(i.c.x + 4.5f, i.c.y - r), i.col);
+        if (repeat_ == Repeat::One)
+            dl->AddText(fonts_.label, fonts_.labelSize * 0.9f,
+                        ImVec2(i.c.x - 1.5f, i.c.y - 4.0f), i.col, "1");
         if (i.clicked)
             repeat_ = repeat_ == Repeat::Off   ? Repeat::All
                       : repeat_ == Repeat::All ? Repeat::One
                                                : Repeat::Off;
-        dl->AddRect(ImVec2(i.c.x - 6, i.c.y - 4), ImVec2(i.c.x + 6, i.c.y + 4),
-                    i.col, 3.0f, 0, 1.4f);
-        dl->AddTriangleFilled(ImVec2(i.c.x + 1, i.c.y - 7),
-                              ImVec2(i.c.x + 5, i.c.y - 4),
-                              ImVec2(i.c.x + 1, i.c.y - 1), i.col);
-        if (repeat_ == Repeat::One)
-            dl->AddText(fonts_.label, fonts_.labelSize,
-                        ImVec2(i.c.x - 2.0f, i.c.y - 6.0f), i.col, "1");
     }
-    // Show or hide the Now Playing artwork well in the sidebar.
+    // Show or hide the Now Playing well: a framed picture, sun and hills.
     {
         const Icon i = icon("artwork", true, artworkPaneOpen_);
+        const ImVec2 tl(i.c.x - 6.5f, i.c.y - 5.5f);
+        const ImVec2 lr(i.c.x + 6.5f, i.c.y + 5.5f);
+        dl->AddRect(tl, lr, i.col, 1.5f, 0, kStroke);
+        dl->AddCircleFilled(ImVec2(tl.x + 3.5f, tl.y + 3.2f), 1.5f, i.col, 8);
+        dl->PathLineTo(ImVec2(tl.x + 1.2f, lr.y - 1.6f));
+        dl->PathLineTo(ImVec2(i.c.x - 0.5f, i.c.y + 0.5f));
+        dl->PathLineTo(ImVec2(i.c.x + 2.0f, lr.y - 2.6f));
+        dl->PathLineTo(ImVec2(i.c.x + 4.0f, i.c.y - 0.5f));
+        dl->PathLineTo(ImVec2(lr.x - 1.2f, lr.y - 1.6f));
+        dl->PathStroke(i.col, 0, kStroke);
         if (i.clicked) artworkPaneOpen_ = !artworkPaneOpen_;
-        dl->AddRect(ImVec2(i.c.x - 6, i.c.y - 6), ImVec2(i.c.x + 6, i.c.y + 6),
-                    i.col, 1.0f, 0, 1.3f);
-        dl->AddLine(ImVec2(i.c.x - 6, i.c.y + 3), ImVec2(i.c.x - 1, i.c.y - 2),
-                    i.col, 1.3f);
-        dl->AddLine(ImVec2(i.c.x - 1, i.c.y - 2), ImVec2(i.c.x + 6, i.c.y + 5),
-                    i.col, 1.3f);
-        dl->AddCircleFilled(ImVec2(i.c.x + 2.5f, i.c.y - 3.0f), 1.6f, i.col, 8);
     }
     const float leftEdge = ix;
 

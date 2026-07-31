@@ -543,8 +543,24 @@ void App::playTrackId(std::uint32_t trackId) {
     }
 }
 
+const Track* App::playingTrack() const {
+    if (!playingTrackId_) return nullptr;
+    auto find = [&](const Library* lib,
+                    const std::unordered_map<std::uint32_t, int>* idx)
+        -> const Track* {
+        if (!lib || !idx) return nullptr;
+        const auto it = idx->find(playingTrackId_);
+        return it == idx->end() ? nullptr : &lib->tracks[it->second];
+    };
+    if (const Track* t = find(shownLibrary(), shownIndex())) return t;
+    if (const Track* t = find(library_ ? &*library_ : nullptr, &trackIndexById_))
+        return t;
+    return find(&hostView_, &hostIndexById_);
+}
+
 void App::playRelative(int delta) {
-    if (!library_ || visible_.empty()) {
+    const Library* shown = shownLibrary();
+    if (!shown || visible_.empty()) {
         if (player_) player_->stop();
         playingTrackId_ = 0;
         return;
@@ -552,7 +568,7 @@ void App::playRelative(int delta) {
     // Find the currently playing row within the visible list, then step.
     int cur = -1;
     for (int i = 0; i < int(visible_.size()); ++i) {
-        if (library_->tracks[visible_[i].second].id == playingTrackId_) {
+        if (shown->tracks[visible_[i].second].id == playingTrackId_) {
             cur = i;
             break;
         }
@@ -563,7 +579,7 @@ void App::playRelative(int delta) {
         int pick = cur;
         while (pick == cur)
             pick = int(rng() % visible_.size());
-        playTrackId(library_->tracks[visible_[pick].second].id);
+        playTrackId(shown->tracks[visible_[pick].second].id);
         return;
     }
 
@@ -577,7 +593,7 @@ void App::playRelative(int delta) {
         }
         next = next < 0 ? int(visible_.size()) - 1 : 0;
     }
-    playTrackId(library_->tracks[visible_[next].second].id);
+    playTrackId(shown->tracks[visible_[next].second].id);
 }
 
 void App::updateLibrary() {

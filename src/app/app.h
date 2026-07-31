@@ -143,6 +143,10 @@ private:
     void drawArtworkPane(float sidebarHeight);
     void updatePlayback();
     void playTrackId(std::uint32_t trackId);
+    // The track currently playing, whichever library it came from. Playback
+    // outlives a source switch, so this looks in the shown library first and
+    // then the other one rather than assuming the iPod's.
+    const Track* playingTrack() const;
     void playRelative(int delta);
     void drawTransport();
     void drawNowPlaying(ImVec2 lcdMin, ImVec2 lcdMax);
