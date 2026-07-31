@@ -15,36 +15,110 @@ struct Fonts {
     float labelSize = 11.0f;
 };
 
-// Palette approximating iTunes 7-9 on Mac OS X.
+// Palette approximating iTunes 10 on Mac OS X. It is the era's flatter,
+// lighter chrome: the brushed-metal contrast of iTunes 7-9 is gone, the LCD
+// went pale grey-green, and the bezels got thinner.
+//
+// This is meant to be the single source of truth. If you find yourself
+// writing pal::rgb(...) at a call site, add a name here instead — the one
+// exception being a pressed or hovered shade derived from a colour that is
+// already named, which is local to the control that draws it.
 namespace pal {
 constexpr ImU32 rgb(int r, int g, int b) { return IM_COL32(r, g, b, 255); }
+constexpr ImU32 alpha(ImU32 c, int a) {
+    return (c & 0x00FFFFFFu) | (ImU32(a) << IM_COL32_A_SHIFT);
+}
 
-inline constexpr ImU32 ToolbarTop = rgb(236, 236, 236);
-inline constexpr ImU32 ToolbarBottom = rgb(199, 199, 199);
-inline constexpr ImU32 ToolbarBorder = rgb(128, 128, 128);
+inline constexpr ImU32 Text = rgb(30, 30, 30);
+inline constexpr ImU32 TextDim = rgb(116, 122, 130);
+inline constexpr ImU32 Warning = rgb(160, 60, 20);
+inline constexpr ImU32 Danger = rgb(160, 40, 40);
+inline constexpr ImU32 Success = rgb(20, 110, 30);
 
-inline constexpr ImU32 LcdBg = rgb(222, 229, 234);
-inline constexpr ImU32 LcdBorder = rgb(148, 157, 166);
-inline constexpr ImU32 LcdText = rgb(55, 65, 75);
-inline constexpr ImU32 LcdTextDim = rgb(105, 115, 125);
+inline constexpr ImU32 ToolbarTop = rgb(229, 229, 229);
+inline constexpr ImU32 ToolbarBottom = rgb(163, 166, 169);
+inline constexpr ImU32 ToolbarBorder = rgb(148, 148, 148);
 
-inline constexpr ImU32 SidebarBg = rgb(214, 221, 229);
-inline constexpr ImU32 SidebarBorder = rgb(156, 164, 174);
-inline constexpr ImU32 SidebarHeader = rgb(101, 115, 131);
+// The centre readout. iTunes 10's is flat and faintly green, with none of
+// the glossy top wash the earlier versions had.
+inline constexpr ImU32 LcdBg = rgb(238, 241, 220);
+inline constexpr ImU32 LcdBgTop = rgb(234, 237, 216);
+inline constexpr ImU32 LcdBgBottom = rgb(245, 248, 225);
+inline constexpr ImU32 LcdBorder = rgb(171, 176, 158);
+inline constexpr ImU32 LcdText = rgb(42, 46, 34);
+inline constexpr ImU32 LcdTextDim = rgb(94, 100, 82);
+inline constexpr ImU32 LcdProgressBg = rgb(184, 189, 168);
+inline constexpr ImU32 LcdProgressFill = rgb(74, 124, 208);
+inline constexpr ImU32 LcdProgressKnob = rgb(60, 104, 186);
 
-inline constexpr ImU32 Selection = rgb(56, 117, 215);   // #3875D7
-inline constexpr ImU32 RowAlt = rgb(240, 245, 253);
+// Generic light control face: the transport capsule, aqua::button, the
+// view-mode segments.
+inline constexpr ImU32 ControlTop = rgb(253, 253, 253);
+inline constexpr ImU32 ControlBottom = rgb(172, 173, 174);
+inline constexpr ImU32 ControlBorder = rgb(176, 178, 179);
+inline constexpr ImU32 ControlDivider = rgb(196, 199, 203);
+inline constexpr ImU32 ControlOnTop = rgb(150, 156, 164);  // pressed: inset
+inline constexpr ImU32 ControlOnBottom = rgb(190, 195, 202);
+inline constexpr ImU32 ControlHotBottom = rgb(236, 236, 238);
+// The volume groove: light where it is filled, dark where it is not, the way
+// a recessed track catches the light.
+inline constexpr ImU32 VolumeFilled = rgb(211, 212, 213);
+inline constexpr ImU32 VolumeEmpty = rgb(113, 113, 113);
+inline constexpr ImU32 DefaultBtnTop = rgb(126, 174, 235);
+inline constexpr ImU32 DefaultBtnBottom = rgb(56, 116, 205);
+inline constexpr ImU32 DefaultBtnBorder = rgb(52, 100, 170);
 
-inline constexpr ImU32 CapacityBg = rgb(238, 238, 238);
-inline constexpr ImU32 CapacityFill = rgb(84, 132, 214);
-inline constexpr ImU32 CapacityBorder = rgb(147, 155, 164);
+// Hand-drawn glyphs: transport arrows, eject, speaker, stars, the iPod.
+inline constexpr ImU32 Glyph = rgb(74, 80, 88);
+inline constexpr ImU32 GlyphDim = rgb(168, 172, 178);
+inline constexpr ImU32 GlyphHot = rgb(50, 56, 64);
+inline constexpr ImU32 GlyphOn = rgb(48, 106, 200);  // shuffle/repeat engaged
 
-inline constexpr ImU32 StatusTop = rgb(247, 247, 247);
-inline constexpr ImU32 StatusBottom = rgb(220, 220, 220);
-inline constexpr ImU32 StatusBorder = rgb(160, 160, 160);
-inline constexpr ImU32 StatusText = rgb(90, 90, 90);
+inline constexpr ImU32 SidebarBg = rgb(224, 229, 236);
+inline constexpr ImU32 SidebarBorder = rgb(160, 166, 175);
+inline constexpr ImU32 SidebarHeader = rgb(120, 130, 144);
+inline constexpr ImU32 SidebarText = rgb(38, 42, 48);
 
-inline constexpr ImU32 TextDim = rgb(110, 118, 128);
+inline constexpr ImU32 Selection = rgb(56, 117, 215);  // #3875D7
+inline constexpr ImU32 SelectionTop = rgb(122, 166, 228);
+inline constexpr ImU32 SelectionBottom = rgb(48, 106, 200);
+inline constexpr ImU32 SelectionEdge = rgb(155, 190, 238);
+inline constexpr ImU32 RowAlt = rgb(242, 246, 252);
+
+// Column browser (Genres | Artists | Albums).
+inline constexpr ImU32 BrowserBg = rgb(255, 255, 255);
+inline constexpr ImU32 BrowserRowAlt = rgb(243, 246, 251);
+inline constexpr ImU32 BrowserHeadTop = rgb(246, 247, 248);
+inline constexpr ImU32 BrowserHeadBottom = rgb(223, 225, 229);
+inline constexpr ImU32 BrowserHeadText = rgb(48, 52, 58);
+inline constexpr ImU32 BrowserBorder = rgb(168, 172, 179);
+
+// Track table.
+inline constexpr ImU32 HeaderTop = rgb(250, 250, 251);
+inline constexpr ImU32 HeaderBottom = rgb(228, 229, 233);
+inline constexpr ImU32 HeaderBorder = rgb(170, 174, 180);
+inline constexpr ImU32 HeaderSortTop = rgb(214, 226, 243);
+inline constexpr ImU32 HeaderSortBottom = rgb(188, 206, 234);
+// Semi-transparent so the row striping still reads through the sorted column.
+inline constexpr ImU32 SortColumnTint = IM_COL32(216, 229, 246, 110);
+inline constexpr ImU32 GridLine = rgb(224, 227, 232);
+inline constexpr ImU32 StarOn = rgb(70, 110, 190);
+inline constexpr ImU32 StarOff = rgb(200, 202, 206);
+
+inline constexpr ImU32 CapacityBg = rgb(240, 240, 241);
+inline constexpr ImU32 CapacityFill = rgb(74, 124, 208);
+inline constexpr ImU32 CapacityBorder = rgb(158, 163, 170);
+
+inline constexpr ImU32 StatusTop = rgb(246, 246, 246);
+inline constexpr ImU32 StatusBottom = rgb(216, 216, 216);
+inline constexpr ImU32 StatusBorder = rgb(150, 150, 150);
+inline constexpr ImU32 StatusText = rgb(88, 92, 98);
+
+inline constexpr ImU32 ArtworkWell = rgb(255, 255, 255);
+inline constexpr ImU32 ArtworkBorder = rgb(168, 174, 182);
+
+inline constexpr ImU32 SheetBg = rgb(237, 237, 237);
+inline constexpr ImU32 SheetBorder = rgb(126, 129, 133);
 }  // namespace pal
 
 // Applies the iTunes-like light style and loads era-appropriate fonts

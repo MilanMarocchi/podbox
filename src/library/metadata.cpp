@@ -11,11 +11,14 @@ namespace fs = std::filesystem;
 namespace podbox {
 namespace {
 
-std::string lowerExt(const fs::path& path) {
-    std::string ext = path.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
+std::string lowerAscii(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(),
                    [](unsigned char c) { return std::tolower(c); });
-    return ext;
+    return s;
+}
+
+std::string lowerExt(const fs::path& path) {
+    return lowerAscii(path.extension().string());
 }
 
 }  // namespace
@@ -31,6 +34,17 @@ bool isSupportedAudioFile(const fs::path& path) {
 
 bool isImportableAudioFile(const fs::path& path) {
     return isSupportedAudioFile(path) || lowerExt(path) == ".flac";
+}
+
+std::uint32_t classifyMediaType(const fs::path& path,
+                                const std::string& genre) {
+    if (lowerExt(path) == ".m4b") return kMediaAudiobook;
+    const std::string g = lowerAscii(genre);
+    if (g == "podcast" || g == "podcasts") return kMediaPodcast;
+    if (g == "audiobook" || g == "audiobooks" || g == "spoken word" ||
+        g == "books & spoken")
+        return kMediaAudiobook;
+    return kMediaAudio;
 }
 
 FileMeta readFileMetadata(const fs::path& path) {
@@ -63,6 +77,8 @@ FileMeta readFileMetadata(const fs::path& path) {
     t.lengthMs = std::uint32_t(props->lengthInMilliseconds());
     t.bitrate = std::uint32_t(props->bitrate());
     t.sampleRate = std::uint32_t(props->sampleRate());
+
+    t.mediaType = classifyMediaType(path, t.genre);
 
     std::error_code ec;
     t.sizeBytes = std::uint32_t(fs::file_size(path, ec));

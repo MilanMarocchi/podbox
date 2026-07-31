@@ -10,6 +10,7 @@
 #include "library/dedupe.h"
 #include "library/fingerprint.h"
 #include "library/fingerprint_store.h"
+#include "library/artwork.h"
 #include "library/metadata.h"
 
 #include <cstdio>
@@ -314,6 +315,28 @@ void testStore() {
     fs::remove_all(mount, ec);
 }
 
+// Cover art, for whichever of the three container families the sample is.
+// Conditional on a real file, because there is no way to assert on artwork
+// without one — but when a file is supplied this is what catches a container
+// PodBox silently returns nothing for, which is how FLAC went unnoticed.
+void testArtwork(const fs::path& sample) {
+    std::printf("artwork\n");
+    if (sample.empty()) {
+        std::printf("  (skipped: no audio file supplied)\n");
+        return;
+    }
+    const podbox::ArtImage art = podbox::loadEmbeddedArtwork(sample);
+    if (art.width == 0) {
+        // Not a failure: plenty of files genuinely carry no cover.
+        std::printf("  (no embedded art in %s)\n",
+                    sample.filename().string().c_str());
+        return;
+    }
+    check(art.width > 0 && art.height > 0, "decoded art has real dimensions");
+    checkEq((long long)art.rgba.size(),
+            (long long)art.width * art.height * 4, "RGBA buffer matches WxH");
+}
+
 void testFingerprint(const fs::path& sample) {
     std::printf("fingerprint\n");
     if (sample.empty()) {
@@ -418,6 +441,32 @@ void scanFolder(const fs::path& root, bool verbose) {
 
 }  // namespace
 
+// Media type decides which sidebar list a track lands in and whether the iPod
+// keeps it out of shuffle, so the classification is worth pinning down.
+void testMediaTypes() {
+    std::printf("media types\n");
+    // The extension wins outright: it is the one unambiguous signal.
+    checkEq(podbox::classifyMediaType("book.m4b", ""),
+            podbox::kMediaAudiobook, "m4b is an audiobook");
+    checkEq(podbox::classifyMediaType("book.M4B", "Rock"),
+            podbox::kMediaAudiobook, "extension beats genre, case-insensitively");
+    // Genre is the fallback, since it is what publishers fill in.
+    checkEq(podbox::classifyMediaType("ep.mp3", "Podcast"),
+            podbox::kMediaPodcast, "podcast genre");
+    checkEq(podbox::classifyMediaType("ep.mp3", "podcasts"),
+            podbox::kMediaPodcast, "podcast genre, plural and lowercase");
+    checkEq(podbox::classifyMediaType("x.m4a", "Books & Spoken"),
+            podbox::kMediaAudiobook, "spoken-word genre is an audiobook");
+    // Everything else is music, including the empty case.
+    checkEq(podbox::classifyMediaType("song.mp3", "Rock"), podbox::kMediaAudio,
+            "ordinary music");
+    checkEq(podbox::classifyMediaType("song.flac", ""), podbox::kMediaAudio,
+            "no genre is music");
+    // A genre that merely mentions one of the words is not a match.
+    checkEq(podbox::classifyMediaType("song.mp3", "Podcast Rock"),
+            podbox::kMediaAudio, "partial genre match is not a podcast");
+}
+
 int main(int argc, char** argv) {
     // dedupe_test --fp a b ...   print and compare fingerprints directly
     if (argc > 2 && std::string(argv[1]) == "--fp") {
@@ -444,6 +493,7 @@ int main(int argc, char** argv) {
     testBucketBoundary();
     testPlaylistRemoval();
     testStore();
+    testMediaTypes();
 
     fs::path root, sample;
     if (argc > 1) {
@@ -453,6 +503,7 @@ int main(int argc, char** argv) {
         if (!files.empty()) sample = files.front();
     }
     testFingerprint(sample);
+    testArtwork(sample);
     testTagWriting(sample);
 
     if (!root.empty()) scanFolder(root, argc > 2);

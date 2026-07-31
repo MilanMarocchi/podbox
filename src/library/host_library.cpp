@@ -15,6 +15,12 @@ namespace {
 
 constexpr const char* kMagic = "podbox-library 1";
 
+// Columns a "T" row must have to be worth reading. Anything beyond this is
+// read when present and defaulted when not, so adding a column does not make
+// every older library file unreadable — and, worse, silently empty, since a
+// row that fails this check is dropped without a word.
+constexpr std::size_t kMinTrackFields = 23;
+
 // Values are tab-separated, so anything that could break a line gets escaped.
 // Paths with tabs are vanishingly rare, but a library that silently corrupts
 // itself on one is not worth shipping.
@@ -152,7 +158,14 @@ bool HostLibrary::load() {
             w.enabled = f[1] == "1";
             w.path = unescape(f[2]);
             watch_.push_back(std::move(w));
-        } else if (f[0] == "T" && f.size() >= 25) {
+        } else if (f[0] == "T" && f.size() >= kMinTrackFields) {
+            // Read by position, tolerating a longer row than we know about:
+            // a file written by a newer PodBox keeps working here, minus
+            // whatever the extra columns held. Anything shorter than the
+            // original layout is genuinely unreadable and is skipped.
+            auto at = [&f](std::size_t i) -> std::string {
+                return i < f.size() ? f[i] : std::string();
+            };
             HostTrack t;
             t.id = toU64(f[1]);
             t.mtime = toI64(f[2]);
@@ -176,8 +189,8 @@ bool HostLibrary::load() {
             t.meta.sampleRate = toU32(f[20]);
             t.meta.playCount = toU32(f[21]);
             t.meta.rating = std::uint8_t(toU32(f[22]));
-            t.meta.mediaType = toU32(f[23]);
-            t.meta.dateAdded = toI64(f[24]);
+            t.meta.mediaType = toU32(at(23));
+            t.meta.dateAdded = toI64(at(24));
             // The dedupe key looks at the extension via meta.location.
             t.meta.location = t.file.string();
             nextId_ = std::max(nextId_, t.id + 1);

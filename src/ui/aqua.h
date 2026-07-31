@@ -41,6 +41,11 @@ void body(const Fonts& f, const char* fmt, ...) IM_FMTARGS(2);
 // A hairline divider with the inset look Aqua used inside sheets.
 void divider();
 
+// The blue gradient a selected row wears in the source list and the column
+// browser, with the lighter hairline along its top edge. Painted over an
+// already-drawn flat Selectable fill.
+void selectionGradient(ImDrawList* dl, ImVec2 a, ImVec2 b);
+
 // Moves the cursor so a row of `count` buttons `width` wide (plus spacing)
 // ends flush with the sheet's right edge, the way Mac dialogs align them.
 void rightAlignButtons(int count, float width);

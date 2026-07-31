@@ -14,6 +14,16 @@ bool isSupportedAudioFile(const std::filesystem::path& path);
 // transcode to a playable one (FLAC).
 bool isImportableAudioFile(const std::filesystem::path& path);
 
+// How a file should be filed on the iPod, from its extension and genre.
+// Separate from readFileMetadata so it can be tested without an audio file,
+// and so Get Info can re-derive it after a genre edit.
+//
+// .m4b is the only unambiguous signal a file carries — it is the extension
+// Apple defined for audiobooks. Genre is a fallback because it is what
+// podcast and audiobook publishers actually fill in, and it is a guess.
+std::uint32_t classifyMediaType(const std::filesystem::path& path,
+                                const std::string& genre);
+
 struct FileMeta {
     bool ok = false;
     std::string error;

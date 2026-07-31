@@ -8,6 +8,27 @@
 
 namespace podbox {
 
+// Values of Library::hashingScheme, read from the database header. Anything
+// but None means the device checks a signature over its database and will
+// show an empty library if it does not match.
+//
+// hash58 is implemented (see itdb/hash58.h). hash72 and hashAB are not:
+// hashAB in particular was only ever added to libgpod through a separate
+// external module rather than in-tree, so it is not reverse-engineered in the
+// openly published way hash58 is.
+inline constexpr std::uint16_t kChecksumNone = 0;
+inline constexpr std::uint16_t kChecksumHash58 = 1;
+inline constexpr std::uint16_t kChecksumHash72 = 2;
+inline constexpr std::uint16_t kChecksumHashAB = 3;
+
+// Track::mediaType. The iPod files a track by this and plays it accordingly:
+// audiobooks are kept out of shuffle and resume where you left off. The values
+// are a bit field in the database, but a track carries exactly one.
+inline constexpr std::uint32_t kMediaAudio = 1;
+inline constexpr std::uint32_t kMediaVideo = 2;
+inline constexpr std::uint32_t kMediaPodcast = 4;
+inline constexpr std::uint32_t kMediaAudiobook = 8;
+
 struct Track {
     std::uint32_t id = 0;
     std::string title;
@@ -25,7 +46,7 @@ struct Track {
     std::uint32_t sampleRate = 0;
     std::uint32_t playCount = 0;
     std::uint8_t rating = 0;      // 0-100, 20 per star
-    std::uint32_t mediaType = 1;  // 1 audio, 2 video, 4 podcast, 8 audiobook
+    std::uint32_t mediaType = 1;  // see kMedia* below
     std::int64_t dateAdded = 0;   // unix time
     std::uint64_t dbid = 0;       // persistent id; generated when 0
 
@@ -87,8 +108,17 @@ ParseResult parseItunesDb(const std::filesystem::path& path);
 // Serializes a library as an iTunes-7-era iTunesDB (dbversion 0x19, no
 // hash) — the dialect classic iPod firmwares accept. The master playlist is
 // regenerated from the track list. Returns false and sets `error` on failure.
+// Extra requirements for a write. Empty means "none", which is what an iPod
+// that needs no checksum wants.
+struct WriteOptions {
+    // The 8 raw bytes of the device's FireWire GUID. When set, the finished
+    // image is checksummed with hash58 before it is written — which iPod
+    // classic and nano 3G-5G require, and which is meaningless elsewhere.
+    std::vector<std::uint8_t> hash58Guid;
+};
+
 bool writeItunesDb(const Library& lib, const std::filesystem::path& path,
-                   std::string* error);
+                   std::string* error, const WriteOptions& opts = {});
 
 // "3:07", "1:02:45"
 std::string formatDuration(std::uint32_t ms);

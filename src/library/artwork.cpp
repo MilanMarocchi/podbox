@@ -1,6 +1,8 @@
 #include "library/artwork.h"
 
 #include <attachedpictureframe.h>
+#include <flacfile.h>
+#include <flacpicture.h>
 #include <id3v2tag.h>
 #include <mp4coverart.h>
 #include <mp4file.h>
@@ -51,6 +53,20 @@ TagLib::ByteVector extractArtBytes(const fs::path& path) {
             tag->item("covr").toCoverArtList();
         if (covers.isEmpty()) return {};
         return covers.front().data();
+    }
+    if (ext == ".flac") {
+        // FLAC keeps cover art in PICTURE metadata blocks. Prefer the one
+        // typed as the front cover; a file can carry several — back cover,
+        // liner notes, the artist's photo — and taking whichever came first
+        // shows the wrong one often enough to matter.
+        TagLib::FLAC::File f(path.c_str(), false);
+        if (!f.isValid()) return {};
+        const TagLib::List<TagLib::FLAC::Picture*> pics = f.pictureList();
+        if (pics.isEmpty()) return {};
+        for (const TagLib::FLAC::Picture* p : pics)
+            if (p->type() == TagLib::FLAC::Picture::FrontCover)
+                return p->data();
+        return pics.front()->data();
     }
     return {};
 }

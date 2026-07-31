@@ -22,6 +22,8 @@
 #include <utility>
 #include <vector>
 
+struct GLFWwindow;
+
 namespace podbox {
 
 class App {
@@ -35,6 +37,10 @@ public:
     // Draws one frame of the UI. Call between ImGui NewFrame/Render.
     void frame();
 
+    // The window, so dragging the toolbar can move it. The toolbar occupies
+    // the title bar, so there is nothing else left to grab.
+    void setWindow(GLFWwindow* w) { window_ = w; }
+
     // Files/folders dropped onto the window (from the GLFW drop callback).
     void onFilesDropped(const std::vector<std::string>& paths);
 
@@ -44,10 +50,23 @@ public:
 
 private:
     // Which source the main panel is showing. Library is the Mac-side
-    // collection; Music/Playlist are the connected iPod's.
-    enum class View { Device, Music, Playlist, Library };
+    // collection; the rest are the connected iPod's. Music, Podcasts and
+    // Audiobooks are the same track list partitioned by media type, the way
+    // iTunes split its source list.
+    enum class View { Device, Music, Playlist, Library, Podcasts, Audiobooks };
 
     void updateLibrary();
+    // Point the main panel at a different source. Selection is per-source, so
+    // switching always clears it — four copies of this used to drift apart.
+    // `playlistIndex` is only meaningful for View::Playlist.
+    void switchSource(View view, int playlistIndex = -1);
+    // The media type a view shows, or 0 for views that do not partition by it.
+    std::uint32_t viewMediaType() const;
+    // True when the device library holds anything of that media type, which is
+    // what decides whether the sidebar offers the row at all.
+    // True when the main panel is showing a track list rather than the
+    // device pane or an empty state.
+    bool showingTracks() const;
     // The tracks currently on screen, and their id index — the Mac library's
     // or the iPod's. Everything that merely displays tracks goes through
     // these so one table serves both. Null when nothing is loaded.
@@ -61,8 +80,25 @@ private:
     void pullPlayCountsToHost();
     void applyFinishedScan();
     void rebuildVisible();
+    // The column browser only applies where faceting a whole collection makes
+    // sense. Playlists are small and manually ordered, and a hidden filter is
+    // exactly what would corrupt a drag-reorder.
+    bool browserApplies() const;
+    void drawColumnBrowser(float width);
     void applyCompletedAdds();
     bool writeDatabase();
+    // True when this iPod's database can be rewritten at all. iPod classic and
+    // nano 3G onwards carry a checksum over the database that PodBox cannot
+    // produce yet; writing without it leaves the device unable to read its own
+    // library. Every mutation funnels through writeDatabase(), which refuses
+    // when this is false — the UI calls it too, so the affected controls are
+    // disabled rather than failing after the user commits to something.
+    bool writesSupported() const;
+    // Proves hash58 against the device's own database before ever writing
+    // one. The iPod already accepts what is on it, so recomputing that file's
+    // checksum and comparing it to the stored one settles whether PodBox can
+    // produce a checksum this device will accept — without risking anything.
+    void verifyHash58();
     // True when Apple Music appears to be mid-sync on this device. Two
     // writers on one iTunesDB is the one thing that can genuinely corrupt it.
     bool appleMusicSyncing() const;
@@ -107,18 +143,24 @@ private:
     void drawArtworkPane(float sidebarHeight);
     void updatePlayback();
     void playTrackId(std::uint32_t trackId);
+    // The track currently playing, whichever library it came from. Playback
+    // outlives a source switch, so this looks in the shown library first and
+    // then the other one rather than assuming the iPod's.
+    const Track* playingTrack() const;
     void playRelative(int delta);
-    void drawTransport(float toolbarWidth);
+    void drawTransport();
     void drawNowPlaying(ImVec2 lcdMin, ImVec2 lcdMax);
     void drawToolbar();
     void drawSidebar(float height);
     void drawMainPanel(float height);
     void drawDeviceView(const IpodInfo& dev);
     void drawTrackTable();
+    void handleTrackTableKeys();
     void drawCapacityBar(const IpodInfo& dev);
     void drawStatusBar();
 
     Fonts fonts_;
+    GLFWwindow* window_ = nullptr;
     DeviceWatcher watcher_;
 
     std::optional<Library> library_;
@@ -133,14 +175,24 @@ private:
     // merge.
     bool playCountsUnmatched_ = false;
     bool hostLoaded_ = false;
+
     // A rescan runs on a worker over its own copy of the library and is
     // swapped in when it finishes, so a cold scan of a large folder never
     // blocks the frame loop.
-    std::thread scanThread_;
-    std::atomic<bool> scanFinished_{false};
-    std::unique_ptr<HostLibrary> scanResult_;
-    ScanStats scanStats_;
-    bool hostScanning_ = false;
+    struct HostScan {
+        std::thread thread;
+        std::atomic<bool> finished{false};
+        std::unique_ptr<HostLibrary> result;
+        ScanStats stats;
+        bool running = false;
+    };
+    HostScan scan_;
+
+    // Set only when verifyHash58() has confirmed PodBox reproduces the
+    // checksum already on the device. Writes stay refused until it does.
+    bool hash58Verified_ = false;
+    std::vector<std::uint8_t> hash58Guid_;
+
     std::string libraryError_;
     std::filesystem::path loadedMount_;
     std::unordered_map<std::uint32_t, int> trackIndexById_;
@@ -153,11 +205,34 @@ private:
     bool visibleDirty_ = true;
     // (position in unsorted list, index into library tracks)
     std::vector<std::pair<int, int>> visible_;
+    // Derived from visible_ and the device library by rebuildVisible(). Both
+    // are read by the chrome every frame, so neither is recomputed there.
+    std::uint64_t visibleTotalMs_ = 0;
+    std::uint64_t visibleTotalBytes_ = 0;
+    bool devHasPodcasts_ = false;
+    bool devHasAudiobooks_ = false;
     // The primary selection (artwork, keyboard target). selection_ holds the
     // whole set, which is usually just this one.
     std::uint32_t selectedTrackId_ = 0;
     std::vector<std::uint32_t> selection_;
     std::uint32_t selectionAnchor_ = 0;  // for shift-click ranges
+
+    // The Genres | Artists | Albums browser above the track list.
+    //
+    // Selections are strings rather than indices because the facet lists are
+    // rebuilt on every keystroke, which would leave an index pointing at
+    // something else. nullopt means "All"; an engaged empty string is the real
+    // blank-genre facet, shown as "Unknown" — a lot of ripped music has no
+    // genre, and conflating the two would make that row unselectable.
+    struct ColumnBrowser {
+        std::optional<std::string> genre, artist, album;
+        std::vector<std::string> genres, artists, albums;
+        bool visible = true;
+        float height = 170.0f;
+        bool engaged() const { return genre || artist || album; }
+        void clearSelection() { genre.reset(); artist.reset(); album.reset(); }
+    };
+    ColumnBrowser browser_;
 
     SyncEngine sync_;
     ImportFormat importFormat_ = ImportFormat::Original;
@@ -179,67 +254,95 @@ private:
     bool restoreOpen_ = false;
     bool foldersOpen_ = false;
 
+    // Get Info. Editing many tracks at once leaves any field the user does
+    // not touch alone, which is why a blank field means "leave alone" rather
+    // than "clear".
+    struct GetInfoEdit {
+        bool open = false;
+        char title[256] = {};
+        char artist[256] = {};
+        char album[256] = {};
+        char genre[128] = {};
+        char year[8] = {};
+        char track[8] = {};
+        bool writeTags = false;
+        // Index into the kMediaChoices table, or -1 when a multi-selection
+        // spans several types — which means "leave each track's own alone".
+        int mediaChoice = -1;
+    };
+    GetInfoEdit getInfo_;
+
+    // Sync review. The plan is recomputed only when something that affects it
+    // changes, never per frame.
+    struct SyncReview {
+        bool open = false;
+        bool dirty = false;
+        SyncOptions options;
+        SyncPlan plan;
+        bool confirmRemove = false;
+    };
+    SyncReview syncUi_;
+
     // Apple Music import. The read and the copy both run on a worker: the
     // read takes seconds, the copy can move gigabytes.
-    // Sync review. The plan is recomputed only when something that affects
-    // it changes, never per frame.
-    // Get Info. Editing many tracks at once leaves any field the user does
-    // not touch alone, which is why the "mixed" markers matter.
-    bool getInfoOpen_ = false;
-    char giTitle_[256] = {};
-    char giArtist_[256] = {};
-    char giAlbum_[256] = {};
-    char giGenre_[128] = {};
-    char giYear_[8] = {};
-    char giTrack_[8] = {};
-    bool giWriteTags_ = false;
-
-    bool syncOpen_ = false;
-    bool syncDirty_ = false;
-    SyncOptions syncOptions_;
-    SyncPlan syncPlan_;
-    bool syncConfirmRemove_ = false;
-
-    bool appleMusicOpen_ = false;
-    std::thread appleThread_;
-    std::atomic<bool> appleFinished_{false};
-    std::atomic<bool> appleCancel_{false};
-    std::atomic<int> appleDone_{0};
-    std::atomic<int> appleTotal_{0};
-    bool appleBusy_ = false;
-    bool appleCopying_ = false;
-    AppleMusicRead appleRead_;
-    CopyResult appleCopy_;
-    std::string appleCurrent_;
-    std::mutex appleMutex_;
+    struct AppleMusicImport {
+        bool open = false;
+        std::thread thread;
+        std::atomic<bool> finished{false};
+        std::atomic<bool> cancel{false};
+        std::atomic<int> done{0};
+        std::atomic<int> total{0};
+        bool busy = false;
+        bool copying = false;
+        AppleMusicRead read;
+        CopyResult copy;
+        std::string current;
+        std::mutex mutex;
+    };
+    AppleMusicImport apple_;
 
     // Duplicate review. Groups are recomputed only when something that
     // affects them changes, not every frame.
-    bool duplicatesOpen_ = false;
-    bool duplicatesDirty_ = false;
-    MatchMode duplicateMode_ = MatchMode::Exact;
-    bool duplicatesIdenticalOnly_ = false;
-    std::vector<DuplicateGroup> duplicateGroups_;
-    std::vector<char> duplicateEnabled_;  // per group; char to stay indexable
-    VerifyJob verify_;
+    struct DuplicateReview {
+        bool open = false;
+        bool dirty = false;
+        MatchMode mode = MatchMode::Exact;
+        bool identicalOnly = false;
+        std::vector<DuplicateGroup> groups;
+        std::vector<char> enabled;  // per group; char to stay indexable
+        VerifyJob verify;
+    };
+    DuplicateReview dupes_;
 
     // Playlist editing.
-    int renamePlaylistIndex_ = -1;   // -1 = not renaming
-    int deletePlaylistIndex_ = -2;   // -2 = no request pending
-    char renameBuf_[128] = {};
-    bool renameJustOpened_ = false;
+    struct PlaylistEdit {
+        int renameIndex = -1;  // -1 = not renaming
+        int deleteIndex = -2;  // -2 = no request pending
+        char buf[128] = {};
+        bool justOpened = false;
+    };
+    PlaylistEdit plEdit_;
 
     // Artwork preview for the selected track. The GL texture is created
     // lazily and refreshed only when the selection changes.
-    unsigned int artTexture_ = 0;
-    std::uint32_t artTrackId_ = 0;
-    bool artHasImage_ = false;
+    struct ArtworkPreview {
+        unsigned int texture = 0;
+        std::uint32_t trackId = 0;
+        bool hasImage = false;
+    };
+    ArtworkPreview art_;
+
     bool ejectRequested_ = false;
 
     // Playback.
+    enum class Repeat { Off, All, One };
     std::unique_ptr<AudioPlayer> player_;
     std::uint32_t playingTrackId_ = 0;
     bool scrubbing_ = false;
+    bool shuffle_ = false;
+    Repeat repeat_ = Repeat::Off;
+    // The sidebar's Now Playing well, toggled from the status bar.
+    bool artworkPaneOpen_ = true;
 };
 
 }  // namespace podbox

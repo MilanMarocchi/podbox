@@ -1,12 +1,95 @@
 // Prints a summary of an iTunesDB file; parser smoke test.
+#include "itdb/hash58.h"
 #include "itdb/itunesdb.h"
 
 #include <cstdio>
+#include <fstream>
 #include <string>
+#include <vector>
+
+namespace {
+
+// Recomputes the hash58 of a database the device already accepts and compares
+// it to the one stored inside. This is the only way to confirm the algorithm
+// end to end without writing to an iPod: if the two agree, PodBox's hash is
+// what the firmware expects for this device.
+int checkHash58(const char* dbPath, const char* guidStr) {
+    std::ifstream in(dbPath, std::ios::binary);
+    if (!in) {
+        std::fprintf(stderr, "error: cannot open %s\n", dbPath);
+        return 1;
+    }
+    std::vector<std::uint8_t> db((std::istreambuf_iterator<char>(in)),
+                                 std::istreambuf_iterator<char>());
+
+    const std::vector<std::uint8_t> guid = podbox::parseFirewireGuid(guidStr);
+    if (guid.empty()) {
+        std::fprintf(stderr,
+                     "error: \"%s\" is not a 16-hex-digit FireWire GUID.\n"
+                     "       Find it in iPod_Control/Device/SysInfoExtended "
+                     "under <key>FireWireGUID</key>.\n",
+                     guidStr);
+        return 2;
+    }
+
+    auto hex = [](const std::vector<std::uint8_t>& v) {
+        std::string s;
+        char buf[3];
+        for (std::uint8_t b : v) {
+            std::snprintf(buf, sizeof(buf), "%02x", b);
+            s += buf;
+        }
+        return s;
+    };
+
+    // Worth saying plainly: a database signed with a different scheme will
+    // never match, however correct the hash58 code is.
+    if (db.size() >= 0x72) {
+        const std::uint16_t scheme =
+            std::uint16_t(db[0x70] | (db[0x71] << 8));
+        if (scheme != podbox::kChecksumHash58)
+            std::printf(
+                "note: this database declares hashing scheme %u, not hash58 "
+                "(1).\n      A mismatch below says nothing about hash58.\n\n",
+                scheme);
+    }
+
+    const std::vector<std::uint8_t> stored = podbox::storedHash58(db);
+    const std::vector<std::uint8_t> computed =
+        podbox::hash58OfDatabase(db, guid);
+    if (computed.empty()) {
+        std::fprintf(stderr, "error: not a usable iTunesDB image\n");
+        return 1;
+    }
+    std::printf("stored:   %s\n", hex(stored).c_str());
+    std::printf("computed: %s\n", hex(computed).c_str());
+    if (stored == computed) {
+        std::printf("\nMATCH — hash58 is correct for this device.\n");
+        return 0;
+    }
+    std::printf(
+        "\nMISMATCH. Either the GUID does not belong to this database, or\n"
+        "PodBox's hash58 is wrong. Do not enable hash58 writes on this iPod.\n");
+    return 1;
+}
+
+}  // namespace
 
 int main(int argc, char** argv) {
+    if (argc >= 2 && std::string(argv[1]) == "--check-hash58") {
+        if (argc < 4) {
+            std::fprintf(stderr,
+                         "usage: itdb_dump --check-hash58 <iTunesDB> "
+                         "<FireWireGUID>\n");
+            return 2;
+        }
+        return checkHash58(argv[2], argv[3]);
+    }
     if (argc < 2) {
-        std::fprintf(stderr, "usage: itdb_dump <iTunesDB>\n");
+        std::fprintf(stderr,
+                     "usage: itdb_dump <iTunesDB> [<out> [+pl]]\n"
+                     "       itdb_dump --check-hash58 <iTunesDB> "
+                     "<FireWireGUID>\n");
         return 2;
     }
     auto res = podbox::parseItunesDb(argv[1]);

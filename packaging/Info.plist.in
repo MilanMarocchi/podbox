@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>PodBox</string>
+  <key>CFBundleDisplayName</key>
+  <string>PodBox</string>
+  <key>CFBundleIdentifier</key>
+  <string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+  <key>CFBundleExecutable</key>
+  <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+  <key>CFBundleVersion</key>
+  <string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+  <key>CFBundleShortVersionString</key>
+  <string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleIconFile</key>
+  <string>PodBox</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>${MACOSX_BUNDLE_COPYRIGHT}</string>
+
+  <!-- Reading the Apple Music library goes through Music.app, because the
+       library folder itself is protected. macOS asks the user to approve this
+       the first time; without a usage string it refuses outright. -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>PodBox asks Music to list your songs so it can copy them into its own library. Your Apple Music library is only read from, never changed.</string>
+
+  <!-- iPods mount as removable volumes. -->
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>PodBox needs access to your iPod to read and update its music library.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>PodBox needs permission to read music folders you ask it to index.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>PodBox needs permission to read music folders you ask it to index.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>PodBox needs permission to read music folders you ask it to index.</string>
+</dict>
+</plist>
