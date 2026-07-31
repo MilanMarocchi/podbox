@@ -114,11 +114,12 @@ stdenv.mkDerivation {
   '';
 
   doCheck = true;
-  # dedupe_test is the only tool with real assertions; the rest need a mounted
-  # iPod or a live Apple Music library and cannot run in the sandbox.
+  # The three suites that assert rather than print, and that need neither a
+  # mounted iPod nor a live Apple Music library. ctest knows them all, so this
+  # cannot drift from the list the plain CMake build runs.
   checkPhase = ''
     runHook preCheck
-    ./dedupe_test
+    ctest --output-on-failure
     runHook postCheck
   '';
 

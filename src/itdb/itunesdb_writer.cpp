@@ -286,12 +286,10 @@ bool writeItunesDb(const Library& lib, const fs::path& path,
     // declared in the header as well as satisfied.
     if (!opts.hash58Guid.empty()) {
         set16(db, 0x70, 1);  // ITDB_CHECKSUM_HASH58
-        std::vector<std::uint8_t> image(db.begin(), db.end());
-        if (!writeHash58(image, opts.hash58Guid)) {
+        if (!writeHash58(db, opts.hash58Guid)) {
             if (error) *error = "Could not compute this iPod's checksum";
             return false;
         }
-        db.assign(image.begin(), image.end());
     }
 
     std::ofstream out(path, std::ios::binary | std::ios::trunc);

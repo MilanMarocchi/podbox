@@ -670,11 +670,9 @@ std::uint32_t App::viewMediaType() const {
     }
 }
 
-bool App::deviceHasMedia(std::uint32_t mediaType) const {
-    if (!library_) return false;
-    for (const Track& t : library_->tracks)
-        if (t.mediaType == mediaType) return true;
-    return false;
+bool App::showingTracks() const {
+    if (view_ == View::Library) return true;
+    return watcher_.device() && library_ && view_ != View::Device;
 }
 
 const std::unordered_map<std::uint32_t, int>* App::shownIndex() const {
@@ -831,6 +829,23 @@ std::vector<std::string> distinctValues(const Library& lib,
 void App::rebuildVisible() {
     visibleDirty_ = false;
     visible_.clear();
+    visibleTotalMs_ = 0;
+    visibleTotalBytes_ = 0;
+
+    // Which media types the device holds decides whether the sidebar offers
+    // the Podcasts and Audiobooks rows. Answering it here rather than in the
+    // sidebar keeps it off the frame path: it was two full scans of the
+    // library every frame, and a library with no podcasts scanned all of it
+    // both times.
+    devHasPodcasts_ = devHasAudiobooks_ = false;
+    if (library_) {
+        for (const Track& t : library_->tracks) {
+            if (t.mediaType == kMediaPodcast) devHasPodcasts_ = true;
+            else if (t.mediaType == kMediaAudiobook) devHasAudiobooks_ = true;
+            if (devHasPodcasts_ && devHasAudiobooks_) break;
+        }
+    }
+
     const Library* lib = shownLibrary();
     const auto* index = shownIndex();
     if (!lib || !index) return;
@@ -923,6 +938,13 @@ void App::rebuildVisible() {
             matches(browser_.artist, t.artist) &&
             matches(browser_.album, t.album))
             visible_.emplace_back(int(visible_.size()), ti);
+    }
+
+    // The status bar shows these every frame; summing them there meant
+    // walking the whole visible list sixty times a second.
+    for (const auto& [pos, ti] : visible_) {
+        visibleTotalMs_ += lib->tracks[ti].lengthMs;
+        visibleTotalBytes_ += lib->tracks[ti].sizeBytes;
     }
 
     const auto& tracks = lib->tracks;

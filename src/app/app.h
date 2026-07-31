@@ -58,7 +58,9 @@ private:
     std::uint32_t viewMediaType() const;
     // True when the device library holds anything of that media type, which is
     // what decides whether the sidebar offers the row at all.
-    bool deviceHasMedia(std::uint32_t mediaType) const;
+    // True when the main panel is showing a track list rather than the
+    // device pane or an empty state.
+    bool showingTracks() const;
     // The tracks currently on screen, and their id index — the Mac library's
     // or the iPod's. Everything that merely displays tracks goes through
     // these so one table serves both. Null when nothing is loaded.
@@ -191,6 +193,12 @@ private:
     bool visibleDirty_ = true;
     // (position in unsorted list, index into library tracks)
     std::vector<std::pair<int, int>> visible_;
+    // Derived from visible_ and the device library by rebuildVisible(). Both
+    // are read by the chrome every frame, so neither is recomputed there.
+    std::uint64_t visibleTotalMs_ = 0;
+    std::uint64_t visibleTotalBytes_ = 0;
+    bool devHasPodcasts_ = false;
+    bool devHasAudiobooks_ = false;
     // The primary selection (artwork, keyboard target). selection_ holds the
     // whole set, which is usually just this one.
     std::uint32_t selectedTrackId_ = 0;

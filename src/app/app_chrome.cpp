@@ -477,11 +477,7 @@ void App::drawSidebar(float height) {
             // Repaint the flat fill as the gradient the source list used.
             const ImVec2 mn = ImGui::GetItemRectMin();
             const ImVec2 mx = ImGui::GetItemRectMax();
-            dl->AddRectFilledMultiColor(mn, mx, pal::SelectionTop,
-                                        pal::SelectionTop,
-                                        pal::SelectionBottom,
-                                        pal::SelectionBottom);
-            dl->AddLine(mn, ImVec2(mx.x, mn.y), pal::SelectionEdge);
+            aqua::selectionGradient(dl, mn, mx);
         }
         // Playlist and volume names are user-supplied and the sidebar is
         // 200px wide. Reserve the right margin so a long name ends in an
@@ -521,7 +517,7 @@ void App::drawSidebar(float height) {
     if (dev) {
         const ImVec2 iconPos = ImGui::GetCursorScreenPos();
         if (row("device", dev->volumeName, 28.0f, view_ == View::Device))
-            view_ = View::Device;
+            switchSource(View::Device);
         const ImVec2 afterRow = ImGui::GetCursorScreenPos();
         // Eject button overlapping the right side of the device row.
         const bool devSelected = view_ == View::Device;
@@ -547,10 +543,10 @@ void App::drawSidebar(float height) {
             }
             // Only offered when the device actually holds some: an empty
             // Podcasts row is a dead end, and most iPods have none.
-            if (deviceHasMedia(kMediaPodcast) &&
+            if (devHasPodcasts_ &&
                 row("podcasts", "Podcasts", 28.0f, view_ == View::Podcasts))
                 switchSource(View::Podcasts);
-            if (deviceHasMedia(kMediaAudiobook) &&
+            if (devHasAudiobooks_ &&
                 row("books", "Audiobooks", 28.0f, view_ == View::Audiobooks))
                 switchSource(View::Audiobooks);
         }
@@ -627,10 +623,7 @@ void App::drawSidebar(float height) {
 void App::drawMainPanel(float height) {
     const float width = ImGui::GetWindowWidth() - kSidebarWidth;
     const auto& dev = watcher_.device();
-    const bool trackView =
-        view_ == View::Library
-            ? true
-            : (dev && library_ && view_ != View::Device);
+    const bool trackView = showingTracks();
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                         trackView ? ImVec2(0, 0) : ImVec2(18, 14));
@@ -1323,16 +1316,11 @@ void App::drawStatusBar() {
         return;
     }
     const Library* shown = shownLibrary();
-    const bool onTracks =
-        shown && (view_ == View::Library || (dev && view_ != View::Device));
+    const bool onTracks = shown && showingTracks();
     if (onTracks) {
-        std::uint64_t totalMs = 0, totalBytes = 0;
-        for (const auto& [pos, ti] : visible_) {
-            totalMs += shown->tracks[ti].lengthMs;
-            totalBytes += shown->tracks[ti].sizeBytes;
-        }
         text = std::to_string(visible_.size()) + " songs, " +
-               formatTotalDuration(totalMs) + ", " + formatBytes(totalBytes);
+               formatTotalDuration(visibleTotalMs_) + ", " +
+               formatBytes(visibleTotalBytes_);
         // A multi-selection is worth stating: it is what the context menu and
         // Delete will act on.
         if (selection_.size() > 1)
