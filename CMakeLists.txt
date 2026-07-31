@@ -188,6 +188,11 @@ target_link_libraries(applemusic_test PRIVATE podbox_core)
 add_executable(sync_test tools/sync_test.cpp)
 target_link_libraries(sync_test PRIVATE podbox_core)
 
+# Needs imgui for the font atlas that text measurement depends on, which is
+# why the drawing helpers are tested apart from dedupe_test.
+add_executable(ui_test tools/ui_test.cpp src/app/app_util.cpp)
+target_link_libraries(ui_test PRIVATE podbox_core imgui_lib)
+
 if(APPLE)
   add_executable(audio_test tools/audio_test.cpp ${PODBOX_AUDIO_SRC})
   target_include_directories(audio_test PRIVATE src)
@@ -224,7 +229,7 @@ endif()
 
 if(PODBOX_INSTALL_TOOLS)
   install(TARGETS itdb_dump podbox_add playcounts_test dedupe_test
-                  library_test applemusic_test sync_test
+                  library_test applemusic_test sync_test ui_test
           RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
@@ -232,6 +237,7 @@ endif()
 # is the one worth wiring into CTest. Run with: ctest --test-dir build
 enable_testing()
 add_test(NAME dedupe COMMAND dedupe_test)
+add_test(NAME ui COMMAND ui_test)
 
 # A DMG for releases: `cpack -G DragNDrop --config build/CPackConfig.cmake`,
 # or `cmake --build build --target package`. Unsigned, like the app itself,

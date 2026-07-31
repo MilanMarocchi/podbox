@@ -20,6 +20,46 @@ void addTextCentered(ImDrawList* dl, ImFont* font, float size, ImVec2 center,
                 text);
 }
 
+std::string truncateToWidth(ImFont* font, float size, const std::string& text,
+                            float maxWidth) {
+    if (text.empty() || maxWidth <= 0.0f) return {};
+    if (font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str()).x <= maxWidth)
+        return text;
+
+    // U+2026, which the loaded glyph ranges cover.
+    static const char* kEllipsis = "\xE2\x80\xA6";
+    const float dots =
+        font->CalcTextSizeA(size, FLT_MAX, 0.0f, kEllipsis).x;
+    if (dots > maxWidth) return {};
+
+    // Step whole UTF-8 code points. ImGui charges a fallback glyph for a
+    // partial sequence, so measurement alone happens to reject a mid-character
+    // cut too — but that is an accident of how it counts, not a guarantee, and
+    // half a character renders as a replacement glyph if it ever changes.
+    // Linear rather than binary because this runs on a handful of strings a
+    // frame, and a binary search would need the same boundary care anyway.
+    std::size_t fit = 0;
+    for (std::size_t i = 1; i <= text.size(); ++i) {
+        if ((text[i] & 0xC0) == 0x80) continue;  // mid-sequence byte
+        const float w =
+            font->CalcTextSizeA(size, FLT_MAX, 0.0f, text.c_str(),
+                                text.c_str() + i)
+                .x;
+        if (w + dots > maxWidth) break;
+        fit = i;
+    }
+    return text.substr(0, fit) + kEllipsis;
+}
+
+void addTextCenteredFit(ImDrawList* dl, ImFont* font, float size, float x0,
+                        float x1, float y, ImU32 color,
+                        const std::string& text) {
+    const std::string fitted = truncateToWidth(font, size, text, x1 - x0);
+    if (fitted.empty()) return;
+    addTextCentered(dl, font, size, ImVec2((x0 + x1) * 0.5f, y), color,
+                    fitted.c_str());
+}
+
 int drawStars(ImDrawList* dl, ImVec2 p, std::uint8_t rating, bool hovered,
               ImVec2 mouse, bool clicked) {
     constexpr float kStep = 13.0f, kR = 5.0f;

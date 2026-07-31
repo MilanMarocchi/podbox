@@ -212,18 +212,24 @@ void App::drawNowPlaying(ImVec2 a, ImVec2 b) {
     if (it == trackIndexById_.end()) return;
     const Track& t = library_->tracks[it->second];
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const float cx = (a.x + b.x) * 0.5f;
+    // Song titles are arbitrarily long and this well is 360px wide, so both
+    // lines are fitted to the space between the LCD's own buttons rather than
+    // centred on the full width and left to run over them.
+    const float tx0 = a.x + kLcdTextInset, tx1 = b.x - kLcdTextInset;
 
-    addTextCentered(dl, fonts_.ui, fonts_.uiSize, ImVec2(cx, a.y + 11.0f),
-                    pal::LcdText, t.title.c_str());
+    // Three rows in 40px, so they are spaced to just clear one another: a
+    // 13px title, an 11px subtitle, then the progress row. The subtitle used
+    // to sit low enough to overlap the elapsed and remaining times.
+    addTextCenteredFit(dl, fonts_.ui, fonts_.uiSize, tx0, tx1, a.y + 10.0f,
+                       pal::LcdText, t.title);
     std::string sub = t.artist;
     if (!t.album.empty()) sub += sub.empty() ? t.album : "  —  " + t.album;
-    addTextCentered(dl, fonts_.label, fonts_.labelSize,
-                    ImVec2(cx, a.y + 24.0f), pal::LcdTextDim, sub.c_str());
+    addTextCenteredFit(dl, fonts_.label, fonts_.labelSize, tx0, tx1,
+                       a.y + 21.0f, pal::LcdTextDim, sub);
 
     const double pos = player_->position();
     const double dur = player_->duration();
-    const float y = b.y - 9.0f;
+    const float y = b.y - 8.0f;
     const float x0 = a.x + 46.0f, x1 = b.x - 46.0f;
     const float frac =
         dur > 0 ? float(std::clamp(pos / dur, 0.0, 1.0)) : 0.0f;
@@ -313,13 +319,13 @@ void App::drawToolbar() {
             } else {
                 line2 = "No iPod connected";
             }
-            const float cx = (a.x + b.x) * 0.5f;
-            addTextCentered(dl, fonts_.ui, fonts_.uiSize,
-                            ImVec2(cx, a.y + 12.0f), pal::LcdText,
-                            line1.c_str());
-            addTextCentered(dl, fonts_.label, fonts_.labelSize,
-                            ImVec2(cx, a.y + 25.0f), pal::LcdTextDim,
-                            line2.c_str());
+            // "Copying <name>" carries a filename, so it needs fitting for
+            // exactly the same reason the now-playing lines do.
+            const float lx0 = a.x + kLcdTextInset, lx1 = b.x - kLcdTextInset;
+            addTextCenteredFit(dl, fonts_.ui, fonts_.uiSize, lx0, lx1,
+                               a.y + 12.0f, pal::LcdText, line1);
+            addTextCenteredFit(dl, fonts_.label, fonts_.labelSize, lx0, lx1,
+                               a.y + 25.0f, pal::LcdTextDim, line2);
             if (syncing && sync_.batchTotal() > 0) {
                 // Thin progress bar along the bottom of the LCD.
                 const float frac =
@@ -477,9 +483,14 @@ void App::drawSidebar(float height) {
                                         pal::SelectionBottom);
             dl->AddLine(mn, ImVec2(mx.x, mn.y), pal::SelectionEdge);
         }
+        // Playlist and volume names are user-supplied and the sidebar is
+        // 200px wide. Reserve the right margin so a long name ends in an
+        // ellipsis instead of running under the eject button or off the edge.
+        const float avail = kSidebarWidth - indent - kSidebarRightMargin;
         dl->AddText(fonts_.ui, fonts_.uiSize, ImVec2(pos.x + indent, pos.y + 2),
                     selected ? IM_COL32_WHITE : pal::Text,
-                    text.c_str());
+                    truncateToWidth(fonts_.ui, fonts_.uiSize, text, avail)
+                        .c_str());
         return clicked;
     };
 
@@ -721,10 +732,15 @@ void App::drawColumnBrowser(float width) {
                 aqua::selectionGradient(pdl, mn, mx);
             else if (rowNo % 2)
                 pdl->AddRectFilled(mn, mx, pal::BrowserRowAlt);
+            // Truncated for the ellipsis; the clip rect stays as a backstop
+            // in case the measurement and the rasteriser ever disagree.
+            const std::string shown =
+                truncateToWidth(fonts_.ui, fonts_.uiSize, text,
+                                mx.x - p.x - 12.0f);
             pdl->PushClipRect(mn, ImVec2(mx.x - 4.0f, mx.y), true);
             pdl->AddText(fonts_.ui, fonts_.uiSize,
                          ImVec2(p.x + 6.0f, p.y + 1.0f),
-                         selected ? IM_COL32_WHITE : pal::Text, text.c_str());
+                         selected ? IM_COL32_WHITE : pal::Text, shown.c_str());
             pdl->PopClipRect();
             ++rowNo;
             return clicked;
@@ -1290,13 +1306,12 @@ void App::drawStatusBar() {
     }
 
     // Whatever is left between the two clusters belongs to the label.
-    const float textCentre = wp.x + (leftEdge + rightEdge) * 0.5f;
-
     std::string text;
     if (!statusMsg_.empty() && ImGui::GetTime() < statusMsgUntil_) {
         text = statusMsg_;
-        addTextCentered(dl, fonts_.label, fonts_.labelSize,
-                        ImVec2(textCentre, iy), pal::StatusText, text.c_str());
+        addTextCenteredFit(dl, fonts_.label, fonts_.labelSize,
+                           wp.x + leftEdge, wp.x + rightEdge, iy,
+                           pal::StatusText, text);
         return;
     }
     const Library* shown = shownLibrary();
@@ -1320,7 +1335,7 @@ void App::drawStatusBar() {
     } else {
         text = "No iPod connected";
     }
-    addTextCentered(dl, fonts_.label, fonts_.labelSize, ImVec2(textCentre, iy),
-                    pal::StatusText, text.c_str());
+    addTextCenteredFit(dl, fonts_.label, fonts_.labelSize, wp.x + leftEdge,
+                       wp.x + rightEdge, iy, pal::StatusText, text);
 }
 }  // namespace podbox
