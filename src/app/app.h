@@ -63,6 +63,13 @@ private:
     void rebuildVisible();
     void applyCompletedAdds();
     bool writeDatabase();
+    // True when this iPod's database can be rewritten at all. iPod classic and
+    // nano 3G onwards carry a checksum over the database that PodBox cannot
+    // produce yet; writing without it leaves the device unable to read its own
+    // library. Every mutation funnels through writeDatabase(), which refuses
+    // when this is false — the UI calls it too, so the affected controls are
+    // disabled rather than failing after the user commits to something.
+    bool writesSupported() const;
     // True when Apple Music appears to be mid-sync on this device. Two
     // writers on one iTunesDB is the one thing that can genuinely corrupt it.
     bool appleMusicSyncing() const;

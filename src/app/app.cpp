@@ -224,7 +224,10 @@ void App::onFilesDropped(const std::vector<std::string>& paths) {
         setStatus("Connect an iPod before adding songs");
         return;
     }
-    if (library_->hashingScheme != 0) {
+    // writeDatabase() refuses too, but catching it here means a dropped folder
+    // is not transcoded and copied onto the device before we admit we cannot
+    // record it in the database.
+    if (!writesSupported()) {
         setStatus("This iPod needs a hashed database — writes not yet supported");
         return;
     }
@@ -348,8 +351,19 @@ std::vector<fs::path> App::availableBackups() const {
     return out;
 }
 
+bool App::writesSupported() const {
+    return library_ && library_->hashingScheme == 0;
+}
+
 bool App::writeDatabase() {
     if (!library_ || loadedMount_.empty()) return false;
+    // The one gate every mutation passes through. It used to sit only on the
+    // drag-and-drop path, which left deletes, ratings, playlist edits, sync and
+    // restore free to write an unhashed database to a device that needs one.
+    if (!writesSupported()) {
+        setStatus("This iPod needs a hashed database — writes not yet supported");
+        return false;
+    }
     if (appleMusicSyncing()) {
         setStatus("Apple Music is syncing this iPod — try again when it finishes");
         return false;
@@ -1328,6 +1342,14 @@ void App::drawRestoreModal() {
     aqua::endSheet();
 
     if (chosen.empty()) return;
+    // A restore is a database write like any other: on a device that needs a
+    // checksum, replacing the current DB with an older PodBox-written one is
+    // just as unreadable. (A backup taken by iTunes would be fine, but we
+    // cannot tell the two apart, and guessing wrong bricks the library.)
+    if (!writesSupported()) {
+        setStatus("This iPod needs a hashed database — writes not yet supported");
+        return;
+    }
     if (appleMusicSyncing()) {
         setStatus("Apple Music is syncing this iPod — try again when it "
                   "finishes");
@@ -1486,13 +1508,20 @@ void App::trackContextMenu(const Track& t) {
     // the existing selection is kept so the menu can act on all of it.
     if (!isSelected(t.id)) selectOnly(t.id);
     const int n = int(selection_.size());
+    // In the Mac library these all edit library.tsv and touch no device; on the
+    // iPod every one of them ends in a database write, so they are unavailable
+    // when that write would be refused.
+    const bool canEdit = viewingHost() || writesSupported();
     ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::rgb(30, 30, 30)));
 
     if (ImGui::MenuItem("Play")) playTrackId(t.id);
+    ImGui::BeginDisabled(!canEdit);
     if (ImGui::MenuItem(n > 1 ? "Get Info…" : "Get Info…", "Cmd+I"))
         openGetInfo();
+    ImGui::EndDisabled();
     ImGui::Separator();
 
+    ImGui::BeginDisabled(!canEdit);
     if (!viewingHost() && ImGui::BeginMenu(
             n > 1 ? "Add These Songs to Playlist" : "Add to Playlist")) {
         if (ImGui::MenuItem("New Playlist…")) createPlaylist(t.id);
@@ -1532,6 +1561,7 @@ void App::trackContextMenu(const Track& t) {
                   : "Remove from iPod";
         if (ImGui::MenuItem(label.c_str())) deleteRequestId_ = t.id;
     }
+    ImGui::EndDisabled();
 
     ImGui::PopStyleColor();
     ImGui::EndPopup();
@@ -2333,6 +2363,7 @@ void App::drawSidebar(float height) {
             if (ImGui::BeginPopupContextItem(
                     ("plctx" + std::to_string(i)).c_str())) {
                 ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::rgb(30, 30, 30)));
+                ImGui::BeginDisabled(!writesSupported());
                 if (ImGui::MenuItem("Rename")) {
                     renamePlaylistIndex_ = i;
                     renameJustOpened_ = true;
@@ -2340,6 +2371,7 @@ void App::drawSidebar(float height) {
                                   library_->playlists[i].name.c_str());
                 }
                 if (ImGui::MenuItem("Delete")) deletePlaylistIndex_ = i;
+                ImGui::EndDisabled();
                 ImGui::PopStyleColor();
                 ImGui::EndPopup();
             }
@@ -2347,7 +2379,9 @@ void App::drawSidebar(float height) {
         ImGui::Dummy(ImVec2(0, 4));
         ImGui::SetCursorPosX(18);
         ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::rgb(70, 80, 92)));
+        ImGui::BeginDisabled(!writesSupported());
         if (ImGui::SmallButton("+ New Playlist")) createPlaylist(0);
+        ImGui::EndDisabled();
         ImGui::PopStyleColor();
     }
 
@@ -2471,7 +2505,8 @@ void App::drawDeviceView(const IpodInfo& dev) {
     ImGui::TextUnformatted("Sync");
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(0, 2));
-    ImGui::BeginDisabled(host_.tracks().empty() || sync_.busy());
+    ImGui::BeginDisabled(host_.tracks().empty() || sync_.busy() ||
+                         !writesSupported());
     if (ImGui::Button("Sync Library to iPod…")) {
         syncOpen_ = true;
         syncDirty_ = true;
@@ -2492,7 +2527,10 @@ void App::drawDeviceView(const IpodInfo& dev) {
     ImGui::Dummy(ImVec2(0, 2));
     ImGui::Checkbox("Skip songs already on this iPod", &skipDuplicates_);
 
-    const bool canScan = library_ && !library_->tracks.empty();
+    // Finding duplicates is harmless, but the sheet's only action is to remove
+    // them, so there is nothing to offer on a device we cannot write to.
+    const bool canScan =
+        library_ && !library_->tracks.empty() && writesSupported();
     ImGui::BeginDisabled(!canScan);
     if (ImGui::Button("Find Duplicates…")) {
         duplicatesOpen_ = true;
@@ -2511,9 +2549,16 @@ void App::drawDeviceView(const IpodInfo& dev) {
     ImGui::TextUnformatted("Safety");
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(0, 2));
+    ImGui::BeginDisabled(!writesSupported());
     if (ImGui::Button("Restore Database…")) restoreOpen_ = true;
+    ImGui::EndDisabled();
     ImGui::PushFont(fonts_.label);
-    if (appleMusicSyncing())
+    if (!writesSupported())
+        ImGui::TextColored(v4(pal::rgb(150, 90, 20)),
+                           "This iPod's database carries a checksum PodBox "
+                           "cannot produce yet, so it is read-only here. "
+                           "Nothing on the device will be changed.");
+    else if (appleMusicSyncing())
         ImGui::TextColored(v4(pal::rgb(150, 90, 20)),
                            "Apple Music is syncing this iPod right now — "
                            "PodBox will not write until it finishes.");
@@ -2665,8 +2710,14 @@ void App::drawTrackTable() {
                 // hover ownership. Testing io.MousePos directly would let a
                 // click on a dialog above also set a rating down here.
                 ImGui::PushID(int(t.id));
+                // Ratings on the Mac library go to library.tsv; on the iPod
+                // they are a database write, so on a device we cannot write
+                // the stars still render but do not respond.
+                const bool rateable = viewingHost() || writesSupported();
+                ImGui::BeginDisabled(!rateable);
                 ImGui::InvisibleButton("##rate", ImVec2(70, 16));
-                const bool hot = ImGui::IsItemHovered();
+                ImGui::EndDisabled();
+                const bool hot = rateable && ImGui::IsItemHovered();
                 const int picked =
                     drawStars(ImGui::GetWindowDrawList(), ImVec2(sp.x, sp.y + 3),
                               t.rating, hot, ImGui::GetIO().MousePos,
@@ -2708,7 +2759,10 @@ void App::drawTrackTable() {
         // In a playlist, plain Delete removes from the playlist; the
         // "Remove from iPod" path stays in the context menu to avoid
         // accidental file deletion.
-        if (view_ == View::Playlist && playlistIndex_ >= 0) {
+        if (!viewingHost() && !writesSupported()) {
+            setStatus(
+                "This iPod needs a hashed database — writes not yet supported");
+        } else if (view_ == View::Playlist && playlistIndex_ >= 0) {
             auto& ids = library_->playlists[playlistIndex_].trackIds;
             int removed = 0;
             for (std::uint32_t id : selection_) {
