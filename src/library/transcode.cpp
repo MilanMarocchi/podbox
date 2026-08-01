@@ -52,7 +52,7 @@ bool toAlac(const fs::path& src, const fs::path& dest) {
 
     if (haveTool("ffmpeg"))
         return run("ffmpeg -y -v error -i " + shellQuote(src.string()) +
-                   " -codec:a alac -sample_fmt s16p -ar " +
+                   " -map 0:a:0 -codec:a alac -sample_fmt s16p -ar " +
                    std::to_string(rate) + " " + shellQuote(dest.string()));
 
     // afconvert has no way to set ALAC bit depth directly, so go via a 16-bit
@@ -71,7 +71,7 @@ bool toAlac(const fs::path& src, const fs::path& dest) {
 bool toMp3(const fs::path& src, const fs::path& dest) {
     if (haveTool("ffmpeg"))
         return run("ffmpeg -y -i " + shellQuote(src.string()) +
-                   " -codec:a libmp3lame -b:a 320k " +
+                   " -map 0:a:0 -codec:a libmp3lame -b:a 320k " +
                    shellQuote(dest.string()));
     if (haveTool("lame"))
         return run("lame -b 320 " + shellQuote(src.string()) + " " +
