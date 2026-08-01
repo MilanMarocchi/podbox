@@ -89,10 +89,6 @@ stdenv.mkDerivation {
     # LC_UUID, which survives — so two builds of identical source differ in
     # exactly those 16 bytes. Without -g there is nothing to differ.
     (lib.cmakeFeature "CMAKE_BUILD_TYPE" "Release")
-    # TagLib 1.13.1 declares `cmake_minimum_required(VERSION 3.0.0)`, which
-    # CMake 4 refuses outright. Nixpkgs ships CMake 4, so without this the
-    # build stops at TagLib's first line. Drop it when TagLib is bumped.
-    (lib.cmakeFeature "CMAKE_POLICY_VERSION_MINIMUM" "3.5")
   ];
 
   # FetchContent_MakeAvailable pulls TagLib's own install() rules into this

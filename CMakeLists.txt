@@ -29,6 +29,14 @@ endif()
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/version.h.in
                ${CMAKE_CURRENT_BINARY_DIR}/generated/podbox_version.h @ONLY)
 
+# TagLib 1.13.1 opens with cmake_minimum_required(VERSION 3.0.0), and CMake 4
+# refuses to configure anything that old. Setting the policy floor here rather
+# than asking every caller to pass it keeps `cmake -S . -B build` working on a
+# current CMake — it was failing outright, which only showed up in CI because
+# older CMake ignores this variable entirely.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING
+    "Oldest cmake_minimum_required a dependency may declare")
+
 include(FetchContent)
 
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)

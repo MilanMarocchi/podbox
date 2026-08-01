@@ -17,6 +17,7 @@ jobs:
   nix:
     name: nix build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -24,7 +25,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
       - name: Build
         run: nix build .#podbox --print-build-logs
       - name: Flake checks
@@ -37,6 +37,7 @@ jobs:
   cmake:
     name: cmake build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -53,6 +54,7 @@ jobs:
   reproducible:
     name: reproducible build
     runs-on: macos-14
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
