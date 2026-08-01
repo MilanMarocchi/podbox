@@ -872,7 +872,9 @@ void App::drawDeviceView(const IpodInfo& dev) {
                                   : " — writes require hash58 (unverified)";
                     break;
                 case kChecksumHash72:
-                    dbInfo += " — read-only: writes require hash72";
+                    dbInfo += hash72Verified_
+                                  ? " — hash72 verified against this iPod"
+                                  : " — writes require hash72 (unverified)";
                     break;
                 case kChecksumHashAB:
                     dbInfo += " — read-only: writes require hashAB";
@@ -972,7 +974,8 @@ void App::drawDeviceView(const IpodInfo& dev) {
     ImGui::EndDisabled();
     ImGui::PushFont(fonts_.label);
     if (!writesSupported() && library_ &&
-        library_->hashingScheme == kChecksumHash58)
+        (library_->hashingScheme == kChecksumHash58 ||
+         library_->hashingScheme == kChecksumHash72))
         ImGui::TextColored(v4(pal::Warning),
                            "PodBox could not reproduce this iPod's checksum, "
                            "so it stays read-only. Nothing will be changed.");

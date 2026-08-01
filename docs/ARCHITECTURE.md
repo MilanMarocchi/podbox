@@ -64,32 +64,50 @@ writes, re-parses and compares field by field, reporting how much was
 preserved. Run it against a real database after touching anything in `itdb/`.
 
 **Checksums.** Newer devices sign the database. `hash58.cpp` implements the
-scheme iPod classic and nano 3G–5G use — HMAC-SHA1 over the image with three
+scheme iPod classic and nano 3G/4G use — HMAC-SHA1 over the image with three
 header fields zeroed, keyed by a value derived from the device's FireWire GUID.
 The algorithm was reverse-engineered by wtbw and first implemented by Christophe
 Fergeau for libgpod under a 3-clause BSD licence, which is why that notice is
 reproduced at the top of the file.
 
-The GUID it is keyed on comes from `iPod_Control/Device/SysInfoExtended`, and
-failing that from the device's USB serial number via IOKit
+`hash72.cpp` implements the scheme the nano 5G uses: SHA-1 over the image with
+four header fields zeroed, then a 46-byte signature — marker, 12 random bytes,
+and AES-128-CBC of SHA1||random under a fixed key. It was reverse-engineered by
+Chris Lee and first implemented for libgpod's LGPL `itdb_hash72.c`, and is an
+independent implementation of the same algorithm. hash72 is why the nano 5G has
+a `HashInfo` file (`iPod_Control/Device/HashInfo`): the device verifies
+signatures with its (UUID, random, IV), so the first write recovers that
+(IV, random) pair from the database the device already accepts — the signature
+decrypts back to the database's own SHA1, which reveals the IV — and records it
+in `HashInfo`. It also stores its database compressed as `iTunesCDB`
+(`itunescdb.cpp`): a zlib stream after the mhbd header, flagged at 0xA8, with
+`total_length` counting the compressed physical size. The hash72 signature
+covers the compressed bytes exactly as they sit on disk, so the writer deflates
+before signing and the parser inflates before reading.
+
+The GUID hash58 is keyed on comes from `iPod_Control/Device/SysInfoExtended`,
+and failing that from the device's USB serial number via IOKit
 (`device/usb_serial.h`) — plenty of iPods have no SysInfoExtended at all, and
 without a GUID a signing device can never be verified and so can never be
 written.
 
-**hashAB is not implemented and should not be copied in.** Unlike hash58 —
-published analysis, an independent BSD implementation, constants that turn out
-to be the public AES S-box — hashAB exists publicly only as an unlicensed
+**hashAB is not implemented and should not be copied in.** Unlike hash58 and
+hash72 — published analysis, independent implementations, constants that turn
+out to be the public AES S-box — hashAB exists publicly only as an unlicensed
 binary (`libhashab.so`) derived from Apple's own code, with no source and no
 published description. Implementing it would mean transcribing a disassembly of
-proprietary code into an MIT project. Devices using it stay read-only.
+proprietary code into an MIT project. Devices using it (nano 6G/7G) stay
+read-only.
 
-Its correctness is established in two halves. SHA-1, HMAC-SHA1, the derived key
-and the AES S-boxes are covered by `hash58_test` against published vectors — and
-the S-boxes are *generated* rather than tabulated, so there is no page of magic
-constants to mistype. The composition is proven per-device at runtime by
-`App::verifyHash58()`, which recomputes the checksum of the database the iPod is
-already using and compares it to the stored one. Writes to a hash58 device are
-refused until that matches. hash72 is not implemented.
+Correctness is established in two halves. SHA-1, HMAC-SHA1, AES-128 and the
+generated S-boxes are covered by `hash58_test` and `hash72_test` against
+published vectors (FIPS 180-1/RFC 2202, FIPS 197) — and the S-boxes are
+*generated* rather than tabulated, so there is no page of magic constants to
+mistype. The composition is proven per-device at runtime by
+`App::verifyChecksum()`, which recomputes the checksum of the database the iPod
+is already using and compares it to the stored one. Writes to a hash58 or
+hash72 device are refused until that matches; for hash72 the recovery of the
+(IV, random) pair is what makes later writes possible at all.
 
 **What is not modelled:** artwork on the device,
 Soundcheck, podcast episode metadata, audiobook resume positions, and the

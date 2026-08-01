@@ -8,14 +8,15 @@
 
 namespace podbox {
 
-// Values of Library::hashingScheme, read from the database header. Anything
-// but None means the device checks a signature over its database and will
-// show an empty library if it does not match.
+// Values of Library::hashingScheme, read from the hashing_scheme field of the
+// mhbd header at offset 0x30. Anything but None means the device checks a
+// signature over its database and will show an empty library if it does not
+// match.
 //
-// hash58 is implemented (see itdb/hash58.h). hash72 and hashAB are not:
-// hashAB in particular was only ever added to libgpod through a separate
+// hash58 and hash72 are implemented (see itdb/hash58.h and itdb/hash72.h).
+// hashAB is not: it was only ever added to libgpod through a separate closed
 // external module rather than in-tree, so it is not reverse-engineered in the
-// openly published way hash58 is.
+// openly published way the other two are.
 inline constexpr std::uint16_t kChecksumNone = 0;
 inline constexpr std::uint16_t kChecksumHash58 = 1;
 inline constexpr std::uint16_t kChecksumHash72 = 2;
@@ -94,6 +95,10 @@ struct Library {
     // 0 = none (pre-2007 iPods), 1 = hash58, 2 = hash72. Read from the mhbd
     // header; tells us whether this device will accept unhashed DB writes.
     std::uint16_t hashingScheme = 0;
+    // True when the device stores its database compressed as iTunesCDB (nano
+    // 5G and later): the library is parsed from the inflated image, and the
+    // next write must deflate again or the device cannot read it.
+    bool compressed = false;
 };
 
 struct ParseResult {
@@ -113,8 +118,16 @@ ParseResult parseItunesDb(const std::filesystem::path& path);
 struct WriteOptions {
     // The 8 raw bytes of the device's FireWire GUID. When set, the finished
     // image is checksummed with hash58 before it is written — which iPod
-    // classic and nano 3G-5G require, and which is meaningless elsewhere.
+    // classic and nano 3G-4G require.
     std::vector<std::uint8_t> hash58Guid;
+    // The (IV, random) pair recovered from the device's own database, kept in
+    // its HashInfo file. When set (with hash58Guid empty), the finished image
+    // is checksummed with hash72 instead — what the nano 5G requires.
+    std::vector<std::uint8_t> hash72Iv;
+    std::vector<std::uint8_t> hash72Rndpart;
+    // Store the database compressed as iTunesCDB. hash72 devices always
+    // arrive and leave compressed; the signature covers the compressed bytes.
+    bool compressed = false;
 };
 
 bool writeItunesDb(const Library& lib, const std::filesystem::path& path,

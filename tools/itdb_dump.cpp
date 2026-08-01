@@ -1,5 +1,6 @@
 // Prints a summary of an iTunesDB file; parser smoke test.
 #include "itdb/hash58.h"
+#include "itdb/hash72.h"
 #include "itdb/itunesdb.h"
 
 #include <cstdio>
@@ -43,10 +44,11 @@ int checkHash58(const char* dbPath, const char* guidStr) {
     };
 
     // Worth saying plainly: a database signed with a different scheme will
-    // never match, however correct the hash58 code is.
-    if (db.size() >= 0x72) {
+    // never match, however correct the hash58 code is. hashing_scheme is the
+    // 16-bit field at 0x30.
+    if (db.size() >= 0x32) {
         const std::uint16_t scheme =
-            std::uint16_t(db[0x70] | (db[0x71] << 8));
+            std::uint16_t(db[0x30] | (db[0x31] << 8));
         if (scheme != podbox::kChecksumHash58)
             std::printf(
                 "note: this database declares hashing scheme %u, not hash58 "
@@ -73,6 +75,66 @@ int checkHash58(const char* dbPath, const char* guidStr) {
     return 1;
 }
 
+// Same idea for hash72: extract the (IV, random) pair hidden in the signature
+// of a database the device already accepts, regenerate the signature with it,
+// and compare. The file must be the database exactly as it sits on the device
+// — for a nano 5G that is the compressed iTunesCDB, not an inflated copy.
+int checkHash72(const char* dbPath, const char* guidStr) {
+    std::ifstream in(dbPath, std::ios::binary);
+    if (!in) {
+        std::fprintf(stderr, "error: cannot open %s\n", dbPath);
+        return 1;
+    }
+    std::vector<std::uint8_t> db((std::istreambuf_iterator<char>(in)),
+                                 std::istreambuf_iterator<char>());
+
+    auto hex = [](const std::vector<std::uint8_t>& v) {
+        std::string s;
+        char buf[3];
+        for (std::uint8_t b : v) {
+            std::snprintf(buf, sizeof(buf), "%02x", b);
+            s += buf;
+        }
+        return s;
+    };
+
+    std::vector<std::uint8_t> digest = db;
+    const std::vector<std::uint8_t> sha1 = podbox::hash72Sha1(digest);
+    const std::vector<std::uint8_t> stored = podbox::storedHash72(db);
+    if (sha1.empty() || stored.empty()) {
+        std::fprintf(stderr, "error: not a usable iTunesDB image\n");
+        return 1;
+    }
+    const auto params = podbox::hash72Extract(stored, sha1);
+    if (!params) {
+        std::fprintf(stderr,
+                     "error: the signature at 0x72 is not hash72-shaped for "
+                     "this database.\n");
+        return 1;
+    }
+    std::printf("sha1:     %s\n", hex(sha1).c_str());
+    std::printf("iv:       %s\n", hex(params->iv).c_str());
+    std::printf("rndpart:  %s\n", hex(params->rndpart).c_str());
+    if (podbox::hash72Signature(sha1, params->iv, params->rndpart) == stored) {
+        std::printf("\nMATCH — hash72 is correct for this device.\n");
+        if (guidStr && *guidStr) {
+            const std::vector<std::uint8_t> guid =
+                podbox::parseFirewireGuid(guidStr);
+            if (!guid.empty()) {
+                std::printf(
+                    "HashInfo for this device would be: HASHv0 + %s (uuid) + "
+                    "%s (rndpart) + %s (iv)\n",
+                    hex(podbox::hash72Uuid(guid)).c_str(),
+                    hex(params->rndpart).c_str(), hex(params->iv).c_str());
+            }
+        }
+        return 0;
+    }
+    std::printf("\nMISMATCH. The signature does not decrypt to this "
+                "database's SHA1.\n");
+    return 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -85,11 +147,22 @@ int main(int argc, char** argv) {
         }
         return checkHash58(argv[2], argv[3]);
     }
+    if (argc >= 2 && std::string(argv[1]) == "--check-hash72") {
+        if (argc < 3) {
+            std::fprintf(stderr,
+                         "usage: itdb_dump --check-hash72 <iTunesCDB> "
+                         "[<FireWireGUID>]\n");
+            return 2;
+        }
+        return checkHash72(argv[2], argc >= 4 ? argv[3] : nullptr);
+    }
     if (argc < 2) {
         std::fprintf(stderr,
                      "usage: itdb_dump <iTunesDB> [<out> [+pl]]\n"
                      "       itdb_dump --check-hash58 <iTunesDB> "
-                     "<FireWireGUID>\n");
+                     "<FireWireGUID>\n"
+                     "       itdb_dump --check-hash72 <iTunesCDB> "
+                     "[<FireWireGUID>]\n");
         return 2;
     }
     auto res = podbox::parseItunesDb(argv[1]);

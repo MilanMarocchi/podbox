@@ -103,6 +103,8 @@ add_library(podbox_core STATIC
   src/device/ipod_device.cpp
   $<IF:$<BOOL:${APPLE}>,src/device/usb_serial_mac.cpp,src/device/usb_serial_stub.cpp>
   src/itdb/hash58.cpp
+  src/itdb/hash72.cpp
+  src/itdb/itunescdb.cpp
   src/itdb/itunesdb.cpp
   src/itdb/itunesdb_writer.cpp
   src/itdb/playcounts.cpp
@@ -128,6 +130,10 @@ endif()
 target_include_directories(podbox_core PRIVATE ${TAGLIB_INCLUDES}
   ${stb_SOURCE_DIR})
 target_link_libraries(podbox_core PUBLIC tag)
+# iTunesCDB is a zlib stream; on macOS this is the SDK's libz, elsewhere it
+# is found like any other dependency.
+find_package(ZLIB REQUIRED)
+target_link_libraries(podbox_core PUBLIC ZLIB::ZLIB)
 if(APPLE)
   # IOKit: reads the iPod's USB serial when SysInfoExtended is missing.
   target_link_libraries(podbox_core PUBLIC "-framework IOKit"
@@ -214,6 +220,9 @@ target_link_libraries(ui_test PRIVATE podbox_core imgui_lib)
 add_executable(hash58_test tools/hash58_test.cpp)
 target_link_libraries(hash58_test PRIVATE podbox_core)
 
+add_executable(hash72_test tools/hash72_test.cpp)
+target_link_libraries(hash72_test PRIVATE podbox_core)
+
 if(APPLE)
   add_executable(audio_test tools/audio_test.cpp ${PODBOX_AUDIO_SRC})
   target_include_directories(audio_test PRIVATE src)
@@ -251,16 +260,17 @@ endif()
 if(PODBOX_INSTALL_TOOLS)
   install(TARGETS itdb_dump podbox_add playcounts_test dedupe_test
                   library_test applemusic_test sync_test ui_test
-                  hash58_test
+                  hash58_test hash72_test
           RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
-# `dedupe_test` is the only tool that asserts rather than just printing, so it
-# is the one worth wiring into CTest. Run with: ctest --test-dir build
+# The suites that assert rather than just printing are the ones worth wiring
+# into CTest. Run with: ctest --test-dir build
 enable_testing()
 add_test(NAME dedupe COMMAND dedupe_test)
 add_test(NAME ui COMMAND ui_test)
 add_test(NAME hash58 COMMAND hash58_test)
+add_test(NAME hash72 COMMAND hash72_test)
 
 # A DMG for releases: `cpack -G DragNDrop --config build/CPackConfig.cmake`,
 # or `cmake --build build --target package`. Unsigned, like the app itself,

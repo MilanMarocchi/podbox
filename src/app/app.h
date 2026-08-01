@@ -87,18 +87,24 @@ private:
     void drawColumnBrowser(float width);
     void applyCompletedAdds();
     bool writeDatabase();
-    // True when this iPod's database can be rewritten at all. iPod classic and
-    // nano 3G onwards carry a checksum over the database that PodBox cannot
-    // produce yet; writing without it leaves the device unable to read its own
+    // True when this iPod's database can be rewritten at all. iPod classic
+    // and nano 3G onwards carry a checksum over the database that PodBox
+    // cannot produce until it has proven it can reproduce the one already
+    // there; writing without it leaves the device unable to read its own
     // library. Every mutation funnels through writeDatabase(), which refuses
     // when this is false — the UI calls it too, so the affected controls are
     // disabled rather than failing after the user commits to something.
     bool writesSupported() const;
-    // Proves hash58 against the device's own database before ever writing
-    // one. The iPod already accepts what is on it, so recomputing that file's
-    // checksum and comparing it to the stored one settles whether PodBox can
-    // produce a checksum this device will accept — without risking anything.
-    void verifyHash58();
+    // Proves the device's checksum against its own database before ever
+    // writing one. The iPod already accepts what is on it, so recomputing
+    // that file's checksum and comparing it to the stored one settles whether
+    // PodBox can produce a checksum this device will accept — without risking
+    // anything. For hash72 this also recovers the (IV, random) pair the
+    // device signs with and writes its HashInfo file.
+    void verifyChecksum();
+    // The database file this device actually keeps its library in: iTunesCDB
+    // on nano 5G and later, iTunesDB everywhere else.
+    std::filesystem::path dbFilePath() const;
     // True when Apple Music appears to be mid-sync on this device. Two
     // writers on one iTunesDB is the one thing that can genuinely corrupt it.
     bool appleMusicSyncing() const;
@@ -188,10 +194,15 @@ private:
     };
     HostScan scan_;
 
-    // Set only when verifyHash58() has confirmed PodBox reproduces the
+    // Set only when verifyChecksum() has confirmed PodBox reproduces the
     // checksum already on the device. Writes stay refused until it does.
     bool hash58Verified_ = false;
     std::vector<std::uint8_t> hash58Guid_;
+    bool hash72Verified_ = false;
+    // The (IV, random) pair recovered from the device's own database; every
+    // write signs with them so the device accepts the result.
+    std::vector<std::uint8_t> hash72Iv_;
+    std::vector<std::uint8_t> hash72Rndpart_;
 
     std::string libraryError_;
     std::filesystem::path loadedMount_;

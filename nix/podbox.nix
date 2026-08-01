@@ -11,6 +11,7 @@
   cmake,
   ninja,
   fetchFromGitHub,
+  zlib,
 }:
 
 let
@@ -67,11 +68,16 @@ stdenv.mkDerivation {
     ];
   };
 
-  # GLFW, OpenGL, AVFoundation and Cocoa all come from the platform SDK, so
-  # there is nothing to add here.
+  # GLFW, OpenGL, AVFoundation and Cocoa come from the platform SDK. zlib
+  # does not — iTunesCDB reads and writes a zlib stream, and nixpkgs' zlib
+  # makes the same library available to CMake's find_package(ZLIB) that the
+  # macOS SDK's libz is on the host.
   nativeBuildInputs = [
     cmake
     ninja
+  ];
+  buildInputs = [
+    zlib
   ];
 
   cmakeFlags = sourceDirFlags ++ [

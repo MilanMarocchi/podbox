@@ -91,7 +91,7 @@ constexpr ModelEntry kModels[] = {
     {"MA446", "iPod 5.5th gen (30 GB, black)"},
     {"MA448", "iPod 5.5th gen (80 GB, white)"},
     {"MA450", "iPod 5.5th gen (80 GB, black)"},
-    // nano 3rd-5th gen (writes need hash58)
+    // nano 3rd-4th gen (writes need hash58)
     {"MA978", "iPod nano 3rd gen (4 GB, silver)"},
     {"MB249", "iPod nano 3rd gen (8 GB, silver)"},
     {"MB253", "iPod nano 3rd gen (8 GB, blue)"},
@@ -102,6 +102,7 @@ constexpr ModelEntry kModels[] = {
     {"MB732", "iPod nano 4th gen (8 GB, blue)"},
     {"MB735", "iPod nano 4th gen (8 GB, pink)"},
     {"MB739", "iPod nano 4th gen (8 GB, purple)"},
+    // nano 5th gen (writes need hash72, iTunesCDB)
     {"MC02", "iPod nano 5th gen (8 GB)"},
     {"MC03", "iPod nano 5th gen (8 GB)"},
     {"MC04", "iPod nano 5th gen (8 GB)"},
@@ -117,7 +118,7 @@ constexpr ModelEntry kModels[] = {
     {"MB565", "iPod classic (120 GB, black)"},
     {"MC293", "iPod classic (160 GB, silver)"},
     {"MC297", "iPod classic (160 GB, black)"},
-    // nano 6th/7th gen (writes need hash72 — not yet supported)
+    // nano 6th/7th gen (writes need hashAB — not yet supported)
     {"MC52", "iPod nano 6th gen"},
     {"MC68", "iPod nano 6th gen"},
     {"MC69", "iPod nano 6th gen"},

@@ -1,8 +1,9 @@
 #pragma once
 
-// hash58 — the checksum the iPod classic (6G/7G) and nano 3G–5G require over
+// hash58 — the checksum the iPod classic (6G/7G) and nano 3G–4G require over
 // their iTunesDB. A database written without a correct one is rejected by the
-// device, which then shows an empty library.
+// device, which then shows an empty library. (The nano 5G uses a different
+// checksum, hash72 — see itdb/hash72.h.)
 //
 // The algorithm is not published by Apple. It was reverse-engineered by wtbw
 // and first implemented by Christophe Fergeau for libgpod, under a 3-clause

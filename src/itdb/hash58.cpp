@@ -1,4 +1,4 @@
-// hash58, the iTunesDB checksum for iPod classic and nano 3G-5G.
+// hash58, the iTunesDB checksum for iPod classic and nano 3G/4G.
 //
 // The algorithm was reverse-engineered by wtbw and first implemented by
 // Christophe Fergeau in libgpod's itdb_hash58.c, which carries this notice:
@@ -33,12 +33,13 @@
 // The shape of it: derive a 64-byte HMAC key from the device's FireWire GUID,
 // then HMAC-SHA1 the whole database with three header fields zeroed. The two
 // lookup tables the key derivation needs turn out to be the standard AES
-// S-box and its inverse, so they are generated here rather than tabulated —
-// which also means there is no 512 bytes of magic data to mistype.
+// S-box and its inverse; they are generated (see itdb/aes_sbox.h) rather than
+// tabulated, so there is no 512 bytes of magic data to mistype.
 
 #include "itdb/hash58.h"
 
-#include <array>
+#include "itdb/aes_sbox.h"
+
 #include <cctype>
 #include <cstring>
 
@@ -54,58 +55,6 @@ constexpr std::uint8_t kFixed[18] = {
     0x67, 0x23, 0xFE, 0x30, 0x45, 0x33, 0xF8, 0x90, 0x99,
     0x21, 0x07, 0xC1, 0xD0, 0x12, 0xB2, 0xA1, 0x07, 0x81,
 };
-
-// --- AES S-box, generated rather than tabulated ---------------------------
-//
-// Multiplication in GF(2^8) with the Rijndael polynomial 0x11B, used only to
-// build the S-box below.
-std::uint8_t gmul(std::uint8_t a, std::uint8_t b) {
-    std::uint8_t p = 0;
-    for (int i = 0; i < 8; ++i) {
-        if (b & 1) p ^= a;
-        const bool hi = a & 0x80;
-        a = std::uint8_t(a << 1);
-        if (hi) a ^= 0x1B;
-        b = std::uint8_t(b >> 1);
-    }
-    return p;
-}
-
-struct SBoxes {
-    std::array<std::uint8_t, 256> fwd{};
-    std::array<std::uint8_t, 256> inv{};
-};
-
-SBoxes buildSBoxes() {
-    SBoxes s;
-    // Multiplicative inverse in GF(2^8), then the affine transform.
-    std::array<std::uint8_t, 256> inverse{};
-    inverse[0] = 0;
-    for (int a = 1; a < 256; ++a)
-        for (int b = 1; b < 256; ++b)
-            if (gmul(std::uint8_t(a), std::uint8_t(b)) == 1) {
-                inverse[a] = std::uint8_t(b);
-                break;
-            }
-    for (int i = 0; i < 256; ++i) {
-        // The affine step: x ^ rotl(x,1) ^ rotl(x,2) ^ rotl(x,3) ^ rotl(x,4),
-        // then ^ 0x63.
-        const std::uint8_t x = inverse[i];
-        std::uint8_t v = x, acc = x;
-        for (int r = 0; r < 4; ++r) {
-            acc = std::uint8_t((acc << 1) | (acc >> 7));
-            v ^= acc;
-        }
-        s.fwd[i] = std::uint8_t(v ^ 0x63);
-    }
-    for (int i = 0; i < 256; ++i) s.inv[s.fwd[i]] = std::uint8_t(i);
-    return s;
-}
-
-const SBoxes& sboxes() {
-    static const SBoxes s = buildSBoxes();
-    return s;
-}
 
 // --- SHA-1 ----------------------------------------------------------------
 
@@ -233,7 +182,7 @@ std::vector<std::uint8_t> parseFirewireGuid(const std::string& hex) {
 
 std::vector<std::uint8_t> hash58Key(const std::vector<std::uint8_t>& fwguid) {
     if (fwguid.size() != 8) return {};
-    const SBoxes& sb = sboxes();
+    const aes::SBoxes& sb = aes::sboxes();
 
     // Each pair of GUID bytes contributes its LCM, split into high and low
     // bytes and pushed through both S-boxes.

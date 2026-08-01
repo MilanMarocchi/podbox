@@ -18,6 +18,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cstdio>
+#include <fstream>
 #include <cstring>
 #include <ctime>
 #include <string>
@@ -944,16 +945,22 @@ void App::drawRestoreModal() {
                   "finishes");
         return;
     }
-    const fs::path dbPath =
-        loadedMount_ / "iPod_Control" / "iTunes" / "iTunesDB";
+    const fs::path dbPath = dbFilePath();
     std::error_code ec;
     rotateBackups(dbPath);  // the current state becomes undoable too
     fs::copy_file(chosen, dbPath, fs::copy_options::overwrite_existing, ec);
-    restoreOpen_ = false;
     if (ec) {
+        restoreOpen_ = false;
         setStatus("Could not restore: " + ec.message());
         return;
     }
+    // On a compressed-database device the placeholder iTunesDB must stay a
+    // zero-byte placeholder, or the device reads the wrong file.
+    if (library_ && library_->compressed) {
+        std::ofstream plain(dbPath.parent_path() / "iTunesDB",
+                            std::ios::binary | std::ios::trunc);
+    }
+    restoreOpen_ = false;
     ownWriteTime_ = fs::last_write_time(dbPath, ec);
     if (player_) player_->stop();
     playingTrackId_ = 0;

@@ -7,6 +7,7 @@
 
 #include "device/ipod_device.h"
 #include "itdb/hash58.h"
+#include "itdb/hash72.h"
 #include "itdb/playcounts.h"
 #include "library/artwork.h"
 #include "library/dedupe.h"
@@ -257,15 +258,31 @@ std::vector<fs::path> App::availableBackups() const {
 bool App::writesSupported() const {
     if (!library_) return false;
     if (library_->hashingScheme == kChecksumNone) return true;
-    // hash58 devices become writable only once we have shown we can reproduce
-    // the checksum they already carry. hash72 and hashAB stay read-only.
-    return library_->hashingScheme == kChecksumHash58 && hash58Verified_;
+    // Hash devices become writable only once we have shown we can reproduce
+    // the checksum they already carry. hashAB stays read-only.
+    if (library_->hashingScheme == kChecksumHash58) return hash58Verified_;
+    if (library_->hashingScheme == kChecksumHash72) return hash72Verified_;
+    return false;
 }
 
-void App::verifyHash58() {
+std::filesystem::path App::dbFilePath() const {
+    // Nano 5G and later keep a zero-byte iTunesDB and the real library as a
+    // compressed iTunesCDB. Which one has content is the reliable tell: Apple
+    // never leaves both populated.
+    const fs::path dir = loadedMount_ / "iPod_Control" / "iTunes";
+    std::error_code ec;
+    const fs::path cdb = dir / "iTunesCDB";
+    if (fs::exists(cdb, ec) && fs::file_size(cdb, ec) > 0) return cdb;
+    return dir / "iTunesDB";
+}
+
+void App::verifyChecksum() {
     hash58Verified_ = false;
     hash58Guid_.clear();
-    if (!library_ || library_->hashingScheme != kChecksumHash58) return;
+    hash72Verified_ = false;
+    hash72Iv_.clear();
+    hash72Rndpart_.clear();
+    if (!library_ || loadedMount_.empty()) return;
 
     const auto& dev = watcher_.device();
     if (!dev) return;
@@ -276,19 +293,65 @@ void App::verifyHash58() {
         return;
     }
 
-    std::ifstream in(loadedMount_ / "iPod_Control" / "iTunes" / "iTunesDB",
-                     std::ios::binary);
-    if (!in) return;
-    std::vector<std::uint8_t> image((std::istreambuf_iterator<char>(in)),
-                                    std::istreambuf_iterator<char>());
-    const std::vector<std::uint8_t> stored = storedHash58(image);
-    const std::vector<std::uint8_t> computed = hash58OfDatabase(image, guid);
-    if (computed.empty() || stored != computed) {
-        setStatus("Could not reproduce this iPod's checksum — staying read-only");
+    if (library_->hashingScheme == kChecksumHash58) {
+        std::ifstream in(dbFilePath(), std::ios::binary);
+        if (!in) return;
+        std::vector<std::uint8_t> image((std::istreambuf_iterator<char>(in)),
+                                        std::istreambuf_iterator<char>());
+        const std::vector<std::uint8_t> stored = storedHash58(image);
+        const std::vector<std::uint8_t> computed =
+            hash58OfDatabase(image, guid);
+        if (computed.empty() || stored != computed) {
+            setStatus("Could not reproduce this iPod's checksum — staying read-only");
+            return;
+        }
+        hash58Verified_ = true;
+        hash58Guid_ = guid;
         return;
     }
-    hash58Verified_ = true;
-    hash58Guid_ = guid;
+
+    if (library_->hashingScheme == kChecksumHash72) {
+        std::ifstream in(dbFilePath(), std::ios::binary);
+        if (!in) return;
+        std::vector<std::uint8_t> image((std::istreambuf_iterator<char>(in)),
+                                        std::istreambuf_iterator<char>());
+        const std::vector<std::uint8_t> digest = hash72Sha1(image);
+        const std::vector<std::uint8_t> stored = storedHash72(image);
+        if (digest.empty() || stored.empty()) return;
+
+        const fs::path hashInfo =
+            loadedMount_ / "iPod_Control" / "Device" / "HashInfo";
+        std::vector<std::uint8_t> iv, rndpart;
+        if (const auto info = readHashInfo(hashInfo, guid)) {
+            // The database on the device was signed with the HashInfo's
+            // values; regenerating its signature is the real proof that
+            // writing with them will be accepted.
+            if (hash72Signature(digest, info->iv, info->rndpart) != stored) {
+                setStatus("This iPod's checksum does not match its HashInfo — "
+                          "staying read-only");
+                return;
+            }
+            iv = info->iv;
+            rndpart = info->rndpart;
+        } else {
+            // No HashInfo yet: recover (IV, random) from the signature of the
+            // database the device already accepts, then record it where the
+            // firmware expects it.
+            const auto params = hash72Extract(stored, digest);
+            if (!params) {
+                setStatus("Could not reproduce this iPod's checksum — staying "
+                          "read-only");
+                return;
+            }
+            iv = params->iv;
+            rndpart = params->rndpart;
+            writeHashInfo(hashInfo,
+                          {hash72Uuid(guid), rndpart, iv});
+        }
+        hash72Verified_ = true;
+        hash72Iv_ = std::move(iv);
+        hash72Rndpart_ = std::move(rndpart);
+    }
 }
 
 bool App::writeDatabase() {
@@ -304,8 +367,7 @@ bool App::writeDatabase() {
         setStatus("Apple Music is syncing this iPod — try again when it finishes");
         return false;
     }
-    const fs::path dbPath =
-        loadedMount_ / "iPod_Control" / "iTunes" / "iTunesDB";
+    const fs::path dbPath = dbFilePath();
     std::error_code ec;
     // Keep the original iTunes-written DB around, once.
     const fs::path backup = dbPath.string() + ".podbox-backup";
@@ -318,6 +380,11 @@ bool App::writeDatabase() {
     WriteOptions opts;
     if (library_->hashingScheme == kChecksumHash58)
         opts.hash58Guid = hash58Guid_;
+    if (library_->hashingScheme == kChecksumHash72) {
+        opts.hash72Iv = hash72Iv_;
+        opts.hash72Rndpart = hash72Rndpart_;
+        opts.compressed = library_->compressed;
+    }
     if (!writeItunesDb(*library_, tmp, &err, opts)) {
         setStatus(err);
         return false;
@@ -326,6 +393,12 @@ bool App::writeDatabase() {
     if (ec) {
         setStatus("Could not update database: " + ec.message());
         return false;
+    }
+    if (library_->compressed) {
+        // A compressed-database device keeps its iTunesDB as a zero-byte
+        // placeholder, exactly as Apple's own software leaves it.
+        std::ofstream plain(dbPath.parent_path() / "iTunesDB",
+                            std::ios::binary | std::ios::trunc);
     }
     // The DB we just wrote already includes any merged play counts, so the
     // firmware's Play Counts file is now stale — remove it to avoid double
@@ -616,8 +689,7 @@ void App::updateLibrary() {
     if (dev->mountPoint == loadedMount_) return;
     loadedMount_ = dev->mountPoint;
 
-    ParseResult res = parseItunesDb(loadedMount_ / "iPod_Control" / "iTunes" /
-                                    "iTunesDB");
+    ParseResult res = parseItunesDb(dbFilePath());
     library_ = std::move(res.library);
     libraryError_ = res.error;
     trackIndexById_.clear();
@@ -655,7 +727,7 @@ void App::updateLibrary() {
         }
     }
 
-    verifyHash58();
+    verifyChecksum();
     pullPlayCountsToHost();
 
     switchSource(library_ ? View::Music : View::Device);

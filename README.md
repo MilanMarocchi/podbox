@@ -108,11 +108,14 @@ on iPods whose database needs no checksum: **iPod 1st–5.5th generation, iPod
 mini, iPod photo, and iPod nano 1st/2nd generation.**
 
 Newer models sign their database, and PodBox reads the required scheme from the
-header. For **hash58** — iPod classic 6G/7G and nano 3G–5G — it implements the
-checksum and then *proves it against your device before using it*: on connect it
-recomputes the hash of the database already on the iPod, which the device
-plainly accepts, and compares it with the one stored inside. Writes are enabled
-only if those match. If they don't, PodBox stays read-only and says so.
+header. For **hash58** (iPod classic 6G/7G and nano 3G/4G) and **hash72** (iPod
+nano 5G) it implements the checksum and then *proves it against your device
+before using it*: on connect it recomputes the hash of the database already on
+the iPod, which the device plainly accepts, and compares it with the one stored
+inside. Writes are enabled only if those match. If they don't, PodBox stays
+read-only and says so. A nano 5G also stores its database compressed as
+`iTunesCDB`; PodBox reads and writes that container, and hash72 is verified
+over the compressed bytes exactly as the device sees them.
 
 That check costs nothing and risks nothing — it reads a file the iPod wrote —
 and it is the difference between "this algorithm should work" and "this
@@ -120,21 +123,24 @@ algorithm works on the iPod in front of you". You can run it by hand too:
 
 ```sh
 itdb_dump --check-hash58 /Volumes/IPOD/iPod_Control/iTunes/iTunesDB <FireWireGUID>
+itdb_dump --check-hash72 /Volumes/IPOD/iPod_Control/iTunes/iTunesCDB <FireWireGUID>
 ```
 
 The GUID is in `iPod_Control/Device/SysInfoExtended`, under `FireWireGUID`.
+The second check also prints the exact `HashInfo` file the nano 5G expects.
 
-**hash72** and **hashAB** are not implemented, and devices using them stay
-read-only. hashAB in particular was only ever added to libgpod through a
-separate external module rather than in-tree, so unlike hash58 there is no
+**hashAB** — the nano 6G/7G — is not implemented, and those devices stay
+read-only. hashAB was only ever added to libgpod through a separate closed
+external module rather than in-tree, so unlike hash58 and hash72 there is no
 openly published description of it to work from. The device pane names
 whichever scheme your iPod declares, so you can tell which case you are in.
 
 | Model | Read | Write |
 |---|---|---|
 | iPod 1st–5.5th gen, mini, photo, nano 1G/2G | ✅ | ✅ |
-| iPod classic (6G/7G), nano 3G–5G | ✅ | ⚠️ *hash58*, self-verified on connect |
-| Later models signing with *hash72* or *hashAB* | ✅ | ⛔ read-only |
+| iPod classic (6G/7G), nano 3G/4G | ✅ | ⚠️ *hash58*, self-verified on connect |
+| iPod nano 5G | ✅ | ⚠️ *hash72* over `iTunesCDB`, self-verified on connect |
+| iPod nano 6G/7G (*hashAB*) | ✅ | ⛔ read-only |
 | iPod shuffle | — | — separate `iTunesSD` format (planned) |
 | iPod touch / iPhone | — | — different sync protocol, out of scope |
 
@@ -316,7 +322,7 @@ file that is merged on connect.
 
 ## Roadmap
 
-- `hash58` checksum so iPod classic and nano 3G–5G can be written
+- `hashAB` checksum so iPod nano 6G/7G can be written
 - Album artwork **on** the device (`ArtworkDB` + `.ithmb` thumbnails)
 - Podcast episode metadata (description, release date) and audiobook
   resume-position, which need parts of the database PodBox carries through

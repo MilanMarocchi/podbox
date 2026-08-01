@@ -1,5 +1,7 @@
 #include "itdb/itunesdb.h"
 
+#include "itdb/itunescdb.h"
+
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -207,9 +209,27 @@ ParseResult parseItunesDb(const fs::path& path) {
         return {std::nullopt, "Not an iTunesDB file (bad header)"};
 
     Library lib;
+
+    // Nano 5G and later store the database compressed as iTunesCDB. The mhbd
+    // header stays plain; the flag at 0xA8 says the payload is a zlib stream,
+    // and total_length then holds the compressed physical size, which must not
+    // be trusted as the parse boundary.
+    if (b.d.size() >= 0xAA && b.u16(0xA8) == 1) {
+        if (auto plain = decompressItunesCdb(b.d)) {
+            b.d = std::move(*plain);
+            lib.compressed = true;
+        } else {
+            return {std::nullopt,
+                    "This database is compressed (iTunesCDB) but will not "
+                    "decompress"};
+        }
+    }
+
     lib.version = b.u32(16);
+    // hashing_scheme lives at 0x30. (A second field at 0x70 is unmodelled and
+    // looks temptingly scheme-like, but it is not the scheme.)
+    if (b.d.size() >= 0x32) lib.hashingScheme = b.u16(0x30);
     const std::uint32_t mhbdHeaderLen = b.u32(4);
-    if (mhbdHeaderLen >= 0x72) lib.hashingScheme = b.u16(0x70);
 
     const size_t fileEnd = std::min(b.d.size(), size_t(b.u32(8)));
 

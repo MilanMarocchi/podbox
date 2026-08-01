@@ -1,6 +1,8 @@
 #include "itdb/itunesdb.h"
 
 #include "itdb/hash58.h"
+#include "itdb/hash72.h"
+#include "itdb/itunescdb.h"
 
 #include <cstring>
 #include <ctime>
@@ -283,18 +285,41 @@ bool writeItunesDb(const Library& lib, const fs::path& path,
 
     // Devices from the iPod classic on reject a database whose checksum does
     // not match, and show an empty library instead. The scheme has to be
-    // declared in the header as well as satisfied.
+    // declared in the header — the hashing_scheme field at 0x30 — as well as
+    // satisfied, and the declared value is itself part of the hashed bytes.
+    //
+    // A nano 5G stores the database compressed, and its hash72 covers the
+    // compressed bytes exactly as they land on disk — so the payload is
+    // deflated first and the signature written into the (uncompressed) header
+    // afterwards. For everything else the plain image is what lands on disk.
+    Bytes out;
+    if (opts.compressed) {
+        out = compressItunesCdb(db);
+        if (out.empty()) {
+            if (error) *error = "Could not compress the database (iTunesCDB)";
+            return false;
+        }
+    } else {
+        out = std::move(db);
+    }
+
     if (!opts.hash58Guid.empty()) {
-        set16(db, 0x70, 1);  // ITDB_CHECKSUM_HASH58
-        if (!writeHash58(db, opts.hash58Guid)) {
+        set16(out, 0x30, kChecksumHash58);  // ITDB_CHECKSUM_HASH58
+        if (!writeHash58(out, opts.hash58Guid)) {
+            if (error) *error = "Could not compute this iPod's checksum";
+            return false;
+        }
+    } else if (!opts.hash72Iv.empty() && !opts.hash72Rndpart.empty()) {
+        set16(out, 0x30, kChecksumHash72);  // ITDB_CHECKSUM_HASH72
+        if (!writeHash72(out, opts.hash72Iv, opts.hash72Rndpart)) {
             if (error) *error = "Could not compute this iPod's checksum";
             return false;
         }
     }
 
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out || !out.write(reinterpret_cast<const char*>(db.data()),
-                           std::streamsize(db.size()))) {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file || !file.write(reinterpret_cast<const char*>(out.data()),
+                             std::streamsize(out.size()))) {
         if (error) *error = "Could not write " + path.string();
         return false;
     }
