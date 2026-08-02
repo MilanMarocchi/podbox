@@ -31,6 +31,7 @@ fs::path allocateMusicPath(const fs::path& mount, const std::string& extension,
             subdirs.push_back(name);
         }
     }
+    if (subdirs.empty()) return {};  // read-only device; caller reports it
 
     std::uniform_int_distribution<size_t> pickDir(0, subdirs.size() - 1);
     std::uniform_int_distribution<int> pickLetter(0, 25);

@@ -84,7 +84,10 @@ void parseTracks(const Buf& b, size_t mhlt, Library& lib) {
     const std::uint32_t count = b.u32(mhlt + 8);
     if (headerLen < 12) return;
     size_t pos = mhlt + headerLen;
-    lib.tracks.reserve(count);
+    // The count field is trusted by the loop below anyway, so the reserve is
+    // only a hint — but a corrupt count must not be allowed to allocate
+    // gigabytes. Cap it well above any real library.
+    lib.tracks.reserve(std::min<std::uint32_t>(count, 1000000));
     for (std::uint32_t i = 0; i < count && b.tagIs(pos, "mhit"); ++i) {
         const std::uint32_t ihLen = b.u32(pos + 4);
         const std::uint32_t itLen = b.u32(pos + 8);
@@ -166,7 +169,7 @@ void parsePlaylists(const Buf& b, size_t mhlp, Library& lib) {
             }
             p += mtLen;
         }
-        pl.trackIds.reserve(nItems);
+        pl.trackIds.reserve(std::min<std::uint32_t>(nItems, 1000000));
         for (std::uint32_t it = 0; it < nItems && b.tagIs(p, "mhip"); ++it) {
             const std::uint32_t ihLen = b.u32(p + 4);
             std::uint32_t itLen = b.u32(p + 8);
