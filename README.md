@@ -326,6 +326,9 @@ On the iPod, all under `iPod_Control/iTunes/`:
 
 Deleting any of these is safe; PodBox recreates what it needs.
 
+When `podbox_add` has to reconstruct a nano 5G `HashInfo`, it also retains the
+original as `iPod_Control/Device/HashInfo.podbox-backup`.
+
 ## Command-line tools
 
 The build also produces small utilities used for testing. With Nix they are in
@@ -334,7 +337,7 @@ The build also produces small utilities used for testing. With Nix they are in
 | Tool | Usage |
 |---|---|
 | `itdb_dump` | `<iTunesDB> [<out> [+pl]]` — print/round-trip a database; also offers `--check-hash58`, `--check-hash72`, and `--check-hashab` verification modes. |
-| `podbox_add` | `<mount-point> [--alac\|--mp3] <file>...` — add files to an unhashed iPod or modern Shuffle from the shell, using the same import pipeline as the GUI. Hashed database writes remain GUI-only. |
+| `podbox_add` | `<mount-point> [--guid <16-hex>] [--alac\|--mp3] <file>...` — add files to any writable iPod from the shell, including hash58, hash72, hashAB/SQLite nanos and modern Shuffles. It verifies the device's existing database before copying, stages every companion database, and installs them together with rollback. The GUID is normally discovered automatically; `--guid` is the fallback. |
 | `playcounts_test` | `<iTunesDB> <Play Counts>` — verify the play-count merge. |
 | `audio_test` | `<audiofile> [seconds]` — play a file through the audio backend (default 3 s). macOS only. |
 | `library_test` | `[show\|scan\|add <dir>\|health\|dupes]` — exercise the Mac library; defaults to `show`. Touches only `~/Library/Application Support/PodBox/`. |

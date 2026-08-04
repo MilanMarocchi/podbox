@@ -119,6 +119,15 @@ and recalculates the complete 57-byte signature before allowing writes. HashAB
 alone is insufficient: `App::verifyChecksum()` also validates the SQLite
 bundle and CBK before a nano 6G/7G becomes writable.
 
+The `podbox_add` command applies the same gate before copying a source file.
+It derives signing parameters only from the database already accepted by that
+device, stages and reads back the new iTunesDB/iTunesCDB, stages the nano SQLite
+bundle or Shuffle indexes when applicable, and swaps the complete set together.
+If staging or backup fails, newly copied audio and VoiceOver files are removed.
+If installation fails, the previous live database set is restored as a unit;
+if the filesystem also refuses that rollback, the audio is deliberately kept
+so the partially installed database cannot point at files PodBox just deleted.
+
 Correctness is established in two halves. SHA-1, HMAC-SHA1, AES-128 and the
 generated S-boxes are covered by `hash58_test` and `hash72_test` against
 published vectors (FIPS 180-1/RFC 2202, FIPS 197) — and the S-boxes are
