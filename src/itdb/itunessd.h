@@ -48,6 +48,9 @@ struct ItunesSdWriteOptions {
     // Generate only missing announcements; existing Apple-generated files are
     // retained. The database is not replaced if speech generation fails.
     bool generateVoiceOver = true;
+    // A renamed playlist keeps its persistent id, so its old announcement
+    // exists but says the wrong name. These ids are regenerated atomically.
+    std::vector<std::uint64_t> refreshPlaylistVoiceOver;
 };
 
 // Writes a modern (Shuffle 3G/4G) iTunesSD. `existingPath` supplies the exact

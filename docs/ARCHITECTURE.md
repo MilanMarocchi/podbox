@@ -4,7 +4,8 @@ Orientation for anyone changing the code. For what PodBox *does*, see the
 [README](../README.md).
 
 Roughly 11,000 lines of C++20 across seven subsystems, plus Dear ImGui, GLFW,
-TagLib and stb. No framework, no plugin system, no dependency injection —
+TagLib, stb, SQLite and the pinned hashAB implementation. No framework, no
+plugin system, no dependency injection —
 `main.cpp` builds an `App` and calls `frame()` in a loop.
 
 ## Module map
@@ -54,6 +55,15 @@ legacy 1G/2G format is detected but stays read-only. `App::writeDatabase()`
 stages and validates `iTunesDB`, `iTunesSD`, and `iTunesStats`, then installs or
 rolls back the three as a matched set.
 
+A nano 6G/7G additionally boots from the device-initialized SQLite bundle at
+`iTunes Library.itlp`. `itunessqlite.cpp` copies that bundle into staging—so
+model-specific schema, indexes and triggers are retained—then updates
+`Library.itdb`, `Dynamic.itdb`, `Locations.itdb` and relevant `Extras.itdb`
+rows. It registers the nano sort-key functions preserved triggers can call,
+regenerates the hashAB-signed `Locations.itdb.cbk`, runs `PRAGMA
+integrity_check`, and checks row counts against the in-memory library. The app
+installs this directory and the signed `iTunesCDB` as one rollback unit.
+
 **The central design decision is preservation.** PodBox models a small subset
 of what Apple writes, and throwing away the rest would degrade a library a
 little more on every write. So three things are carried through verbatim:
@@ -100,22 +110,26 @@ and failing that from the device's USB serial number via IOKit
 without a GUID a signing device can never be verified and so can never be
 written.
 
-**hashAB is not implemented and should not be copied in.** Unlike hash58 and
-hash72 — published analysis, independent implementations, constants that turn
-out to be the public AES S-box — hashAB exists publicly only as an unlicensed
-binary (`libhashab.so`) derived from Apple's own code, with no source and no
-published description. Implementing it would mean transcribing a disassembly of
-proprietary code into an MIT project. Devices using it (nano 6G/7G) stay
-read-only.
+`hashab.cpp` wraps the open, Unlicense-licensed
+[`dstaley/hashab`](https://github.com/dstaley/hashab) C implementation. CMake
+and Nix pin the audited revision; do not unpin the large white-box tables or
+silently track its default branch. The wrapper zeroes/restores the `iTunesCDB`
+header ranges, recovers the embedded 23-byte nonce from an accepted signature,
+and recalculates the complete 57-byte signature before allowing writes. HashAB
+alone is insufficient: `App::verifyChecksum()` also validates the SQLite
+bundle and CBK before a nano 6G/7G becomes writable.
 
 Correctness is established in two halves. SHA-1, HMAC-SHA1, AES-128 and the
 generated S-boxes are covered by `hash58_test` and `hash72_test` against
 published vectors (FIPS 180-1/RFC 2202, FIPS 197) — and the S-boxes are
 *generated* rather than tabulated, so there is no page of magic constants to
-mistype. The composition is proven per-device at runtime by
+mistype. `hashab_test` pins published hashAB vectors, nonce inversion and the
+physical compressed writer; `itunessqlite_test` exercises a device-like
+bundle, preserved triggers, CBK signing and repeat writes. The composition is
+proven per-device at runtime by
 `App::verifyChecksum()`, which recomputes the checksum of the database the iPod
-is already using and compares it to the stored one. Writes to a hash58 or
-hash72 device are refused until that matches; for hash72 the recovery of the
+is already using and compares it to the stored one. Writes to a hash58,
+hash72 or hashAB device are refused until that matches; for hash72 the recovery of the
 (IV, random) pair is what makes later writes possible at all.
 
 **What is not modelled:** artwork on the device,
@@ -269,8 +283,9 @@ building the same program.
 
 The assertion-based tests are wired into CTest; run
 `ctest --test-dir build --output-on-failure` before committing. They cover
-deduplication/import metadata, UI helpers, hash58/hash72 cryptographic vectors,
-and modern Shuffle `iTunesSD` parsing/writing.
+deduplication/import metadata, UI helpers, hash58/hash72/hashAB cryptographic
+vectors, nano SQLite/CBK composition, and modern Shuffle `iTunesSD`
+parsing/writing.
 
 The remaining device-facing checks need local data:
 

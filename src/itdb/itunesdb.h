@@ -13,10 +13,7 @@ namespace podbox {
 // signature over its database and will show an empty library if it does not
 // match.
 //
-// hash58 and hash72 are implemented (see itdb/hash58.h and itdb/hash72.h).
-// hashAB is not: it was only ever added to libgpod through a separate closed
-// external module rather than in-tree, so it is not reverse-engineered in the
-// openly published way the other two are.
+// The three schemes are implemented in itdb/hash58, hash72 and hashab.
 inline constexpr std::uint16_t kChecksumNone = 0;
 inline constexpr std::uint16_t kChecksumHash58 = 1;
 inline constexpr std::uint16_t kChecksumHash72 = 2;
@@ -84,6 +81,11 @@ struct Library {
     std::vector<Track> tracks;
     std::vector<Playlist> playlists;  // master playlist excluded
     std::string masterName;
+    // Persistent ids shared with the nano 6G/7G SQLite companion databases.
+    // Keeping them stable is required for Library.itdb's db_info and master
+    // container to continue describing the same library after a write.
+    std::uint64_t databaseDbid = 0;
+    std::uint64_t masterDbid = 0;
     std::uint32_t version = 0;
 
     // Whole mhsd datasets PodBox does not model: podcasts, the album list
@@ -95,7 +97,7 @@ struct Library {
         std::vector<std::uint8_t> payload;
     };
     std::vector<RawDataset> extraDatasets;
-    // 0 = none (pre-2007 iPods), 1 = hash58, 2 = hash72. Read from the mhbd
+    // 0 = none, 1 = hash58, 2 = hash72, 3 = hashAB. Read from the mhbd
     // header; tells us whether this device will accept unhashed DB writes.
     std::uint16_t hashingScheme = 0;
     // True when the device stores its database compressed as iTunesCDB (nano
@@ -128,6 +130,9 @@ struct WriteOptions {
     // is checksummed with hash72 instead — what the nano 5G requires.
     std::vector<std::uint8_t> hash72Iv;
     std::vector<std::uint8_t> hash72Rndpart;
+    // The nano 6G/7G device UUID and 23-byte nonce used for hashAB.
+    std::vector<std::uint8_t> hashAbUuid;
+    std::vector<std::uint8_t> hashAbNonce;
     // Store the database compressed as iTunesCDB. hash72 devices always
     // arrive and leave compressed; the signature covers the compressed bytes.
     bool compressed = false;

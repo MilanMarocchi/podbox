@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -147,7 +148,10 @@ private:
     void drawDeletePlaylistModal();
     void setStatus(const std::string& msg);
     void createPlaylist(std::uint32_t withTrackId);
-    void addToPlaylist(int playlistIndex, std::uint32_t trackId);
+    void addToPlaylist(int playlistIndex,
+                       const std::vector<std::uint32_t>& trackIds);
+    void queueFilesToIpod(const std::vector<std::filesystem::path>& files);
+    void addSelectedHostTracksToIpod();
     void trackContextMenu(const Track& t);
     bool isSelected(std::uint32_t trackId) const;
     // Applies a click's modifiers to the selection. `row` is the index into
@@ -212,6 +216,9 @@ private:
     // write signs with them so the device accepts the result.
     std::vector<std::uint8_t> hash72Iv_;
     std::vector<std::uint8_t> hash72Rndpart_;
+    bool hashAbVerified_ = false;
+    std::vector<std::uint8_t> hashAbUuid_;
+    std::vector<std::uint8_t> hashAbNonce_;
 
     // A 3rd/4th-generation Shuffle has both iTunesDB (metadata used by the
     // desktop) and modern iTunesSD (the database its firmware plays). Older
@@ -241,6 +248,7 @@ private:
     std::uint32_t selectedTrackId_ = 0;
     std::vector<std::uint32_t> selection_;
     std::uint32_t selectionAnchor_ = 0;  // for shift-click ranges
+    int dragSelectAnchorRow_ = -1;
 
     // The Genres | Artists | Albums browser above the track list.
     //
@@ -347,6 +355,11 @@ private:
         bool justOpened = false;
     };
     PlaylistEdit plEdit_;
+    // VoiceOver files are keyed by playlist dbid rather than name. Renames
+    // must explicitly refresh the existing audio; successful deletes clean
+    // up their now-unreferenced announcements.
+    std::unordered_set<std::uint64_t> refreshPlaylistVoiceOver_;
+    std::unordered_set<std::uint64_t> removedPlaylistVoiceOver_;
 
     // Artwork preview for the selected track. The GL texture is created
     // lazily and refreshed only when the selection changes.

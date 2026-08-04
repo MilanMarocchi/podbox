@@ -118,7 +118,7 @@ constexpr ModelEntry kModels[] = {
     {"MB565", "iPod classic (120 GB, black)"},
     {"MC293", "iPod classic (160 GB, silver)"},
     {"MC297", "iPod classic (160 GB, black)"},
-    // nano 6th/7th gen (writes need hashAB — not yet supported)
+    // nano 6th/7th gen (hashAB plus the SQLite companion database set)
     {"MC52", "iPod nano 6th gen"},
     {"MC68", "iPod nano 6th gen"},
     {"MC69", "iPod nano 6th gen"},

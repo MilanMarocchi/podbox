@@ -27,14 +27,17 @@ styled after iTunes 10.
 - **iPod shuffle 3G/4G** writes the firmware's `iTunesSD` alongside
   `iTunesDB`. Missing track and playlist announcements are synthesized as
   22.05 kHz mono VoiceOver WAV files using macOS's installed system voice.
+  Renaming a playlist regenerates its spoken name; deleting it removes the
+  now-unused announcement after the matched database write succeeds.
 - **Mac media keys** control PodBox playback through macOS's system
   now-playing interface, including while the window is in the background.
 - **Delete songs** from the device (right-click → *Remove from iPod*, or select
   and press Delete), with a confirmation dialog.
 - **Playlists** — create, rename, delete, add/remove tracks (right-click a song
   → *Add to Playlist*), and drag to reorder within a playlist.
-- **Multi-select** with shift-click for ranges and ⌘-click to toggle. The
-  context menu adapts: *Rate These Songs*, *Remove 12 Songs from iPod*.
+- **Multi-select** with shift-click, click-drag across a range, or ⌘-click to
+  toggle. The context menu adapts: *Rate These Songs*, *Remove 12 Songs from
+  iPod*.
 - **Ratings** — five clickable stars in the track list, or right-click →
   *Rating*. Written straight into the database.
 - **Get Info** (⌘I) to edit name, artist, album, genre, year and track number.
@@ -64,6 +67,10 @@ styled after iTunes 10.
   in place. It reads tags and computes a fingerprint; it **never moves, renames
   or modifies your files**. The index lives in
   `~/Library/Application Support/PodBox/library.tsv`.
+- **Send exactly what you selected.** Click-drag across songs in the Mac
+  library, right-click the selection, then choose *Add N Songs to iPod*. It
+  uses the same duplicate checks, transcoding queue and one final database
+  write as dropping those files onto the window.
 - **Watch folders** — add and remove them under *Folders…* in the sidebar, with
   a per-folder enable switch and a live song count. Rescanning is incremental:
   files whose size and modification time are unchanged are skipped. Files that
@@ -113,14 +120,23 @@ on iPods whose database needs no checksum: **iPod 1st–5.5th generation, iPod
 mini, iPod photo, and iPod nano 1st/2nd generation.**
 
 Newer models sign their database, and PodBox reads the required scheme from the
-header. For **hash58** (iPod classic 6G/7G and nano 3G/4G) and **hash72** (iPod
-nano 5G) it implements the checksum and then *proves it against your device
+header. For **hash58** (iPod classic 6G/7G and nano 3G/4G), **hash72** (iPod
+nano 5G), and **hashAB** (iPod nano 6G/7G), it implements the checksum and then
+*proves it against your device*
 before using it*: on connect it recomputes the hash of the database already on
 the iPod, which the device plainly accepts, and compares it with the one stored
 inside. Writes are enabled only if those match. If they don't, PodBox stays
 read-only and says so. A nano 5G also stores its database compressed as
-`iTunesCDB`; PodBox reads and writes that container, and hash72 is verified
-over the compressed bytes exactly as the device sees them.
+`iTunesCDB`; PodBox reads and writes that container, and its signature is
+verified over the compressed bytes exactly as the device sees them.
+
+The nano 6G/7G also boots from five SQLite companion databases in
+`iTunes Library.itlp`. PodBox enables writes only when the existing
+device-created bundle passes schema, row-count, SQLite-integrity and
+`Locations.itdb.cbk` signature checks. A write stages a copy so the firmware's
+model-specific tables, indexes and triggers survive, updates its library,
+playlist, playback-stat and location rows, re-signs the CBK, validates the
+whole set, then installs it with `iTunesCDB` as one rollback unit.
 
 That check costs nothing and risks nothing — it reads a file the iPod wrote —
 and it is the difference between "this algorithm should work" and "this
@@ -129,23 +145,23 @@ algorithm works on the iPod in front of you". You can run it by hand too:
 ```sh
 itdb_dump --check-hash58 /Volumes/IPOD/iPod_Control/iTunes/iTunesDB <FireWireGUID>
 itdb_dump --check-hash72 /Volumes/IPOD/iPod_Control/iTunes/iTunesCDB <FireWireGUID>
+itdb_dump --check-hashab /Volumes/IPOD/iPod_Control/iTunes/iTunesCDB <FireWireGUID>
 ```
 
 The GUID is in `iPod_Control/Device/SysInfoExtended`, under `FireWireGUID`.
 The second check also prints the exact `HashInfo` file the nano 5G expects.
-
-**hashAB** — the nano 6G/7G — is not implemented, and those devices stay
-read-only. hashAB was only ever added to libgpod through a separate closed
-external module rather than in-tree, so unlike hash58 and hash72 there is no
-openly published description of it to work from. The device pane names
-whichever scheme your iPod declares, so you can tell which case you are in.
+HashAB support uses the open, Unlicense-licensed
+[`dstaley/hashab`](https://github.com/dstaley/hashab) implementation, pinned to
+an audited commit. Its published suite includes 100 vectors and 10,000 random
+comparisons with the historical binary; PodBox additionally tests its wrapper,
+nonce recovery, physical `iTunesCDB` writer and SQLite/CBK composition.
 
 | Model | Read | Write |
 |---|---|---|
 | iPod 1st–5.5th gen, mini, photo, nano 1G/2G | ✅ | ✅ |
 | iPod classic (6G/7G), nano 3G/4G | ✅ | ⚠️ *hash58*, self-verified on connect |
 | iPod nano 5G | ✅ | ⚠️ *hash72* over `iTunesCDB`, self-verified on connect |
-| iPod nano 6G/7G (*hashAB*) | ✅ | ⛔ read-only |
+| iPod nano 6G/7G | ✅ | ⚠️ *hashAB* + verified `iTunes Library.itlp` set |
 | iPod shuffle 3G/4G | ✅ | ✅ `iTunesDB` + `iTunesSD` + VoiceOver |
 | iPod shuffle 1G/2G | — | ⛔ read-only (legacy `iTunesSD`) |
 | iPod touch / iPhone | — | — different sync protocol, out of scope |
@@ -190,9 +206,9 @@ configures offline and builds exactly what `nix build` builds.
 ### With CMake
 
 Requires **CMake 3.24+** and a **C++20** compiler — on macOS that's the Command
-Line Tools (`xcode-select --install`). All dependencies — Dear ImGui, GLFW,
-TagLib, stb — are fetched automatically by CMake at configure time; nothing
-needs to be installed via Homebrew.
+Line Tools (`xcode-select --install`). Fetched dependencies — Dear ImGui, GLFW,
+TagLib, stb and hashAB — are pinned and downloaded automatically by CMake;
+nothing needs to be installed via Homebrew.
 
 ```sh
 git clone https://github.com/MilanMarocchi/podbox.git
@@ -224,8 +240,10 @@ flake is macOS-only for that reason.
    model, serial, firmware and capacity under the **device** entry.
 2. Click **Music** to see every song, or a **playlist** to see its contents.
    Sort by clicking a column header; filter with the search box.
-3. **Add music**: drag audio files or folders onto the window. Accepted formats
-   are MP3, AAC/ALAC (`.m4a`/`.m4b`), WAV, AIFF and FLAC. Pick an import format
+3. **Add music**: drag audio files or folders onto the window, or click-drag to
+   select a range in the Mac Library and right-click → *Add N Songs to iPod*.
+   Accepted formats are MP3, AAC/ALAC (`.m4a`/`.m4b`), WAV, AIFF and FLAC.
+   Pick an import format
    under the device view (*Keep original*, *ALAC*, or *MP3*); FLAC is always
    converted so it plays on the iPod.
 4. **Play a song**: double-click it, or use the play/prev/next controls and
@@ -261,18 +279,20 @@ iPod accepts a 24-bit ALAC file and then silently refuses to play it.
 PodBox writes directly to your iPod's database, so it is careful:
 
 - **Five rolling backups.** Before every write the current database is rotated
-  into `iTunesDB.podbox-bak.1` … `.5`. The very first PodBox write additionally
+  into `iTunesDB.podbox-bak.1` … `.5` (`iTunesCDB…` on newer nanos). The very
+  first PodBox write additionally
   keeps the original iTunes-written database forever as
   `iTunesDB.podbox-backup`. Restore any of them from the device pane
   (*Restore Database…*), which lists each backup with its date and song count;
   restoring rotates the current state in first, so the restore is itself
   undoable. On a 3G/4G Shuffle, `iTunesSD` and `iTunesStats` are rotated and
   restored as the matching set, so the firmware index and play-count entries
-  cannot drift away from `iTunesDB`.
+  cannot drift away from `iTunesDB`. On nano 6G/7G, the matching
+  `iTunes Library.itlp` directory is rotated and restored with `iTunesCDB`.
 - **Atomic writes.** Every database write goes to a temporary file and is then
   renamed into place, so an interrupted write cannot corrupt the library.
-- **Writes are refused** on iPods that need a checksum PodBox cannot produce
-  (see the table above), while Music.app is mid-sync, and when the device's
+- **Writes are refused** when PodBox cannot verify the device's complete
+  database set (see the table above), while Music.app is mid-sync, and when the device's
   `Play Counts` file cannot be matched to the track list — in that last case
   the file is preserved rather than deleted, because it still holds listening
   history that a later load may be able to merge.
@@ -299,8 +319,10 @@ On the iPod, all under `iPod_Control/iTunes/`:
 | `iTunesDB.podbox-backup` | the original iTunes-written database, kept once |
 | `iTunesSD.podbox-bak.1` … `.5` | matching Shuffle firmware-index backups |
 | `iTunesStats.podbox-bak.1` … `.5` | matching Shuffle play-stat backups |
+| `iTunesCDB.podbox-bak.1` … `.5` | rolling compressed-database backups on newer nanos |
+| `iTunes Library.itlp.podbox-bak.1` … `.5` | matching nano 6G/7G SQLite-bundle backups |
 | `PodBoxFingerprints` | source fingerprints, so transcoded imports are recognised |
-| `iTunesDB.podbox-tmp`, `iTunesSD.podbox-tmp`, `iTunesStats.podbox-tmp` | transient; only present during a write |
+| `iTunesDB.podbox-tmp`, `iTunesCDB.podbox-tmp`, `iTunes Library.itlp.podbox-tmp`, `iTunesSD.podbox-tmp`, `iTunesStats.podbox-tmp` | transient; only present during a write |
 
 Deleting any of these is safe; PodBox recreates what it needs.
 
@@ -311,14 +333,16 @@ The build also produces small utilities used for testing. With Nix they are in
 
 | Tool | Usage |
 |---|---|
-| `itdb_dump` | `<iTunesDB> [<out> [+pl]]` — print a database summary. With an output path, round-trip it through the writer and verify nothing changed; `+pl` also injects a synthetic playlist first (needs ≥3 tracks). |
-| `podbox_add` | `<mount-point> [--alac\|--mp3] <file>...` — add files to a mounted iPod from the shell, using the same pipeline as the GUI. |
+| `itdb_dump` | `<iTunesDB> [<out> [+pl]]` — print/round-trip a database; also offers `--check-hash58`, `--check-hash72`, and `--check-hashab` verification modes. |
+| `podbox_add` | `<mount-point> [--alac\|--mp3] <file>...` — add files to an unhashed iPod or modern Shuffle from the shell, using the same import pipeline as the GUI. Hashed database writes remain GUI-only. |
 | `playcounts_test` | `<iTunesDB> <Play Counts>` — verify the play-count merge. |
 | `audio_test` | `<audiofile> [seconds]` — play a file through the audio backend (default 3 s). macOS only. |
 | `library_test` | `[show\|scan\|add <dir>\|health\|dupes]` — exercise the Mac library; defaults to `show`. Touches only `~/Library/Application Support/PodBox/`. |
 | `applemusic_test` | `[summary\|list <n>\|copy <n>\|copy all]` — defaults to `summary`, which reads everything and writes nothing. `copy` writes into `~/Music/PodBox`. |
 | `sync_test` | `<ipod-mount> [--remove]` — print the sync plan. Entirely read-only; needs a saved Mac library. |
-| `dedupe_test` | `[<music-dir> [verbose]]`, or `--fp <file>...` to print and compare fingerprints. The only tool with real assertions; exits non-zero on failure. |
+| `dedupe_test` | `[<music-dir> [verbose]]`, or `--fp <file>...` to print and compare fingerprints. |
+| `hash58_test`, `hash72_test`, `hashab_test` | Published cryptographic vectors plus complete database-writer checks. |
+| `itunessqlite_test` | Stages, rewrites, signs and validates a device-like nano 6G/7G companion bundle. |
 | `itunessd_test` | No arguments for regression tests, or `<iTunesDB> <existing-iTunesSD> <output>` to validate a proposed Shuffle database without touching the device. |
 | `shuffle_repair` | `<mount-point>` — transactionally rebuild a 3G/4G Shuffle's `iTunesSD` and `iTunesStats`, synthesize missing VoiceOver, and retain a matched backup of all three databases. This writes to the device. |
 
@@ -340,7 +364,6 @@ file that is merged on connect.
 
 ## Roadmap
 
-- `hashAB` checksum so iPod nano 6G/7G can be written
 - Album artwork **on** the device (`ArtworkDB` + `.ithmb` thumbnails)
 - Podcast episode metadata (description, release date) and audiobook
   resume-position, which need parts of the database PodBox carries through
@@ -350,7 +373,8 @@ file that is merged on connect.
 
 ## License
 
-[MIT](LICENSE) © 2026 Milan Marocchi. Contributions welcome.
+[MIT](LICENSE) © 2026 Milan Marocchi. Contributions welcome. The fetched
+hashAB implementation is separately available under The Unlicense.
 
 This project is not affiliated with or endorsed by Apple. iPod and iTunes are
 trademarks of Apple Inc.

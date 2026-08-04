@@ -602,8 +602,13 @@ void App::drawSidebar(float height) {
                         ImGuiInputTextFlags_AutoSelectAll);
                 if (done || ImGui::IsItemDeactivated()) {
                     if (plEdit_.buf[0]) {
-                        library_->playlists[i].name = plEdit_.buf;
-                        writeDatabase();
+                        Playlist& playlist = library_->playlists[i];
+                        if (playlist.name != plEdit_.buf) {
+                            playlist.name = plEdit_.buf;
+                            if (playlist.dbid)
+                                refreshPlaylistVoiceOver_.insert(playlist.dbid);
+                            writeDatabase();
+                        }
                     }
                     plEdit_.renameIndex = -1;
                 }
@@ -866,7 +871,9 @@ void App::drawDeviceView(const IpodInfo& dev) {
                                   : " — writes require hash72 (unverified)";
                     break;
                 case kChecksumHashAB:
-                    dbInfo += " — read-only: writes require hashAB";
+                    dbInfo += hashAbVerified_
+                                  ? " — hashAB + SQLite bundle verified"
+                                  : " — hashAB/SQLite set unverified";
                     break;
                 default:
                     dbInfo += " — read-only: unrecognised hash scheme " +
@@ -969,10 +976,12 @@ void App::drawDeviceView(const IpodInfo& dev) {
                            "device will be changed.");
     else if (!writesSupported() && library_ &&
         (library_->hashingScheme == kChecksumHash58 ||
-         library_->hashingScheme == kChecksumHash72))
+         library_->hashingScheme == kChecksumHash72 ||
+         library_->hashingScheme == kChecksumHashAB))
         ImGui::TextColored(v4(pal::Warning),
-                           "PodBox could not reproduce this iPod's checksum, "
-                           "so it stays read-only. Nothing will be changed.");
+                           "PodBox could not reproduce this iPod's complete "
+                           "database set, so it stays read-only. Nothing "
+                           "will be changed.");
     else if (!writesSupported())
         ImGui::TextColored(v4(pal::Warning),
                            "This iPod's database carries a checksum PodBox "
@@ -1102,12 +1111,32 @@ void App::drawTrackTable() {
             ImGui::TableNextColumn();
             char lbl[32];
             std::snprintf(lbl, sizeof(lbl), "%d##%u", r + 1, t.id);
-            if (ImGui::Selectable(lbl, selected,
-                                  ImGuiSelectableFlags_SpanAllColumns |
-                                      ImGuiSelectableFlags_AllowDoubleClick |
-                                      ImGuiSelectableFlags_AllowOverlap)) {
+            const bool clicked = ImGui::Selectable(
+                lbl, selected,
+                ImGuiSelectableFlags_SpanAllColumns |
+                    ImGuiSelectableFlags_AllowDoubleClick |
+                    ImGuiSelectableFlags_AllowOverlap);
+            if (clicked) {
                 const ImGuiIO& io = ImGui::GetIO();
                 selectRow(r, t.id, io.KeyShift, io.KeySuper || io.KeyCtrl);
+            }
+            if (viewingHost() && ImGui::IsItemActivated() &&
+                ImGui::IsMouseDown(ImGuiMouseButton_Left))
+                dragSelectAnchorRow_ = r;
+            if (viewingHost() && dragSelectAnchorRow_ >= 0 &&
+                ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
+                ImGui::IsItemHovered(
+                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
+                const int lo = std::min(dragSelectAnchorRow_, r);
+                const int hi = std::max(dragSelectAnchorRow_, r);
+                selection_.clear();
+                for (int row = lo;
+                     row <= hi && row < int(visible_.size()); ++row)
+                    selection_.push_back(
+                        shown->tracks[visible_[row].second].id);
+                selectionAnchor_ =
+                    shown->tracks[visible_[dragSelectAnchorRow_].second].id;
+                selectedTrackId_ = t.id;
             }
             if (ImGui::IsItemHovered() &&
                 ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
@@ -1176,6 +1205,8 @@ void App::drawTrackTable() {
     }
     ImGui::PopStyleColor(2);
     ImGui::EndTable();
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        dragSelectAnchorRow_ = -1;
 
     if (newRatingId && newRating >= 0) setTrackRating(newRatingId, newRating);
 

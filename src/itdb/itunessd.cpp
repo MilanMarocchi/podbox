@@ -362,13 +362,14 @@ bool generateVoiceWave(const fs::path& output, const std::string& text,
 }
 
 bool ensureAnnouncement(const fs::path& directory, std::uint64_t dbid,
-                        const std::string& text, std::string* error) {
+                        const std::string& text, bool refresh,
+                        std::string* error) {
     if (!dbid || text.empty()) return true;
     const std::string stem = shuffleVoiceOverName(dbid);
     const fs::path wav = directory / (stem + ".wav");
     const fs::path aiff = directory / (stem + ".aiff");
     std::error_code ec;
-    if (fs::exists(wav, ec) || fs::exists(aiff, ec)) return true;
+    if (!refresh && (fs::exists(wav, ec) || fs::exists(aiff, ec))) return true;
     fs::create_directories(directory, ec);
     if (ec) {
         if (error) *error = "Could not create " + directory.string();
@@ -386,6 +387,10 @@ bool ensureAnnouncement(const fs::path& directory, std::uint64_t dbid,
         if (error) *error = "Could not install Shuffle VoiceOver file: " + ec.message();
         return false;
     }
+    // Older sync tools sometimes wrote AIFF. Install the replacement WAV
+    // first, then remove the stale alternate so the firmware cannot choose
+    // the old spoken name.
+    fs::remove(aiff, ec);
     return true;
 }
 
@@ -582,13 +587,17 @@ bool writeItunesSd(const Library& library, const fs::path& existingPath,
             std::string speech = track.title;
             if (!track.artist.empty()) speech += ", " + track.artist;
             if (!ensureAnnouncement(speakable / "Tracks", track.dbid, speech,
-                                    error))
+                                    false, error))
                 return false;
         }
         for (std::size_t i = 0; i < library.playlists.size(); ++i) {
-            if (!playlistNeedsVoice[i]) continue;
+            const bool refresh = std::find(
+                options.refreshPlaylistVoiceOver.begin(),
+                options.refreshPlaylistVoiceOver.end(), playlistDbids[i]) !=
+                options.refreshPlaylistVoiceOver.end();
+            if (!playlistNeedsVoice[i] && !refresh) continue;
             if (!ensureAnnouncement(speakable / "Playlists", playlistDbids[i],
-                                    library.playlists[i].name, error))
+                                    library.playlists[i].name, refresh, error))
                 return false;
         }
     }

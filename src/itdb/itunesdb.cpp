@@ -189,6 +189,7 @@ void parsePlaylists(const Buf& b, size_t mhlp, Library& lib) {
         }
         if (pl.isMaster) {
             lib.masterName = pl.name;
+            lib.masterDbid = pl.dbid;
         } else {
             lib.playlists.push_back(std::move(pl));
         }
@@ -231,6 +232,9 @@ ParseResult parseItunesDb(const fs::path& path) {
     }
 
     lib.version = b.u32(16);
+    if (b.d.size() >= 0x20)
+        lib.databaseDbid = std::uint64_t(b.u32(24)) |
+                           (std::uint64_t(b.u32(28)) << 32);
     // hashing_scheme lives at 0x30. (A second field at 0x70 is unmodelled and
     // looks temptingly scheme-like, but it is not the scheme.)
     if (b.d.size() >= 0x32) lib.hashingScheme = b.u16(0x30);

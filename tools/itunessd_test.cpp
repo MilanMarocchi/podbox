@@ -267,15 +267,32 @@ int main(int argc, char** argv) {
     expect(remapped.size() >= 48 && get32(remapped, 8 + 32 + 4) == 0,
            "new track receives empty statistics");
     if (testVoiceOver) {
+        const fs::path playlistVoice =
+            base / "iPod_Control" / "Speakable" / "Playlists" /
+            "1020304050607080.wav";
         expect(fs::exists(base / "iPod_Control" / "Speakable" / "Tracks" /
                           "0123456789ABCDEF.wav"),
                "generate first track VoiceOver WAV");
         expect(fs::exists(base / "iPod_Control" / "Speakable" / "Tracks" /
                           "FFEEDDCCBBAA9988.wav"),
                "generate second track VoiceOver WAV");
-        expect(fs::exists(base / "iPod_Control" / "Speakable" / "Playlists" /
-                          "1020304050607080.wav"),
+        expect(fs::exists(playlistVoice),
                "generate playlist VoiceOver WAV");
+
+        const Bytes oldAnnouncement = readBytes(playlistVoice);
+        podbox::Library renamed = lib;
+        renamed.playlists[0].name = "Recently Renamed Favourites";
+        podbox::ItunesSdWriteOptions renameOptions;
+        renameOptions.refreshPlaylistVoiceOver = {playlist.dbid};
+        const fs::path renamedOutput = itunes / "iTunesSD.renamed";
+        error.clear();
+        expect(podbox::writeItunesSd(renamed, output, renamedOutput, base,
+                                     &error, renameOptions),
+               error.empty() ? "write renamed playlist" : error.c_str());
+        const Bytes newAnnouncement = readBytes(playlistVoice);
+        expect(!oldAnnouncement.empty() && !newAnnouncement.empty() &&
+                   oldAnnouncement != newAnnouncement,
+               "regenerate renamed playlist VoiceOver WAV");
     }
 
     std::error_code ec;

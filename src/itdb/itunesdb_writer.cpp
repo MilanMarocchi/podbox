@@ -2,6 +2,7 @@
 
 #include "itdb/hash58.h"
 #include "itdb/hash72.h"
+#include "itdb/hashab.h"
 #include "itdb/itunescdb.h"
 
 #include <cstring>
@@ -248,7 +249,8 @@ bool writeItunesDb(const Library& lib, const fs::path& path,
     set32(mhlp, 8, std::uint32_t(1 + lib.playlists.size()));
     const std::string masterName =
         lib.masterName.empty() ? "iPod" : lib.masterName;
-    append(mhlp, mhyp(masterName, true, allIds, now, rng(), {}, 0));
+    append(mhlp, mhyp(masterName, true, allIds, now,
+                      lib.masterDbid ? lib.masterDbid : rng(), {}, 0));
     for (const Playlist& pl : lib.playlists)
         append(mhlp, mhyp(pl.name, false, pl.trackIds, now,
                           pl.dbid ? pl.dbid : rng(),
@@ -277,7 +279,7 @@ bool writeItunesDb(const Library& lib, const fs::path& path,
     // re-sync it from scratch.
     set32(db, 16, lib.version ? lib.version : 0x19);
     set32(db, 20, 2 + extraCount);  // child mhsd count
-    set64(db, 24, rng());
+    set64(db, 24, lib.databaseDbid ? lib.databaseDbid : rng());
     set16(db, 32, 2);
     append(db, mhsd(1, mhlt));
     append(db, mhsd(2, mhlp));
@@ -314,6 +316,15 @@ bool writeItunesDb(const Library& lib, const fs::path& path,
         set16(out, 0x30, kChecksumHash72);  // ITDB_CHECKSUM_HASH72
         if (!writeHash72(out, opts.hash72Iv, opts.hash72Rndpart)) {
             if (error) *error = "Could not compute this iPod's checksum";
+            return false;
+        }
+    } else if (!opts.hashAbUuid.empty() && !opts.hashAbNonce.empty()) {
+        set16(out, 0x30, kChecksumHashAB);
+        // nano 6G/7G databases carry this companion header marker in addition
+        // to hashing_scheme=3.
+        set16(out, 0x70, 4);
+        if (!writeHashAb(out, opts.hashAbUuid, opts.hashAbNonce)) {
+            if (error) *error = "Could not compute this iPod's hashAB checksum";
             return false;
         }
     }

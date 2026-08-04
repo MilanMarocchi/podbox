@@ -1,6 +1,6 @@
 # PodBox, built from pinned sources with no network access.
 #
-# Upstream's CMakeLists fetches GLFW, Dear ImGui, TagLib and stb at configure
+# Upstream's CMakeLists fetches GLFW, Dear ImGui, TagLib, stb and hashAB at configure
 # time. Rather than restructure it, we hand FetchContent the sources it wants
 # via FETCHCONTENT_SOURCE_DIR_<NAME> and switch it fully offline, so the plain
 # `cmake -S . -B build` path keeps working unchanged for people without Nix
@@ -12,6 +12,7 @@
   ninja,
   fetchFromGitHub,
   zlib,
+  sqlite,
 }:
 
 let
@@ -43,6 +44,12 @@ let
       repo = "stb";
       rev = "31c1ad37456438565541f4919958214b6e762fb4";
       hash = "sha256-m2yNUlA37hDkKQVrQ+R8nufHfW/cXLnMo+n1X1Cyun0=";
+    };
+    hashab = fetchFromGitHub {
+      owner = "dstaley";
+      repo = "hashab";
+      rev = "cc3e8aac05172a52e32da259fb31ccca9c625218";
+      hash = "sha256-opqgwxlWWe4uxW2ygclJ04by72TQd67MdxSMVjGVfrY=";
     };
   };
 
@@ -78,6 +85,7 @@ stdenv.mkDerivation {
   ];
   buildInputs = [
     zlib
+    sqlite
   ];
 
   cmakeFlags = sourceDirFlags ++ [
@@ -116,7 +124,7 @@ stdenv.mkDerivation {
   '';
 
   doCheck = true;
-  # The three suites that assert rather than print, and that need neither a
+  # Suites that assert rather than print, and that need neither a
   # mounted iPod nor a live Apple Music library. ctest knows them all, so this
   # cannot drift from the list the plain CMake build runs.
   checkPhase = ''

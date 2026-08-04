@@ -1,6 +1,7 @@
 // Prints a summary of an iTunesDB file; parser smoke test.
 #include "itdb/hash58.h"
 #include "itdb/hash72.h"
+#include "itdb/hashab.h"
 #include "itdb/itunesdb.h"
 
 #include <cstdio>
@@ -135,6 +136,44 @@ int checkHash72(const char* dbPath, const char* guidStr) {
     return 1;
 }
 
+int checkHashAb(const char* dbPath, const char* guidStr) {
+    std::ifstream in(dbPath, std::ios::binary);
+    if (!in) {
+        std::fprintf(stderr, "error: cannot open %s\n", dbPath);
+        return 1;
+    }
+    std::vector<std::uint8_t> db((std::istreambuf_iterator<char>(in)), {});
+    const auto uuid = podbox::parseFirewireGuid(guidStr);
+    if (uuid.empty()) {
+        std::fprintf(stderr,
+                     "error: \"%s\" is not a 16-hex-digit FireWire GUID\n",
+                     guidStr);
+        return 2;
+    }
+    const auto digest = podbox::hashAbSha1(db);
+    const auto stored = podbox::storedHashAb(db);
+    const auto nonce = podbox::hashAbExtractNonce(stored, digest, uuid);
+    if (!nonce) {
+        std::fprintf(stderr,
+                     "MISMATCH — hashAB cannot be reproduced for this "
+                     "database and GUID.\n");
+        return 1;
+    }
+    auto hex = [](const std::vector<std::uint8_t>& value) {
+        std::string out;
+        char byte[3];
+        for (const std::uint8_t b : value) {
+            std::snprintf(byte, sizeof(byte), "%02x", b);
+            out += byte;
+        }
+        return out;
+    };
+    std::printf("sha1:   %s\nnonce:  %s\n\n"
+                "MATCH — hashAB is correct for this device.\n",
+                hex(digest).c_str(), hex(*nonce).c_str());
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -156,13 +195,24 @@ int main(int argc, char** argv) {
         }
         return checkHash72(argv[2], argc >= 4 ? argv[3] : nullptr);
     }
+    if (argc >= 2 && std::string(argv[1]) == "--check-hashab") {
+        if (argc < 4) {
+            std::fprintf(stderr,
+                         "usage: itdb_dump --check-hashab <iTunesCDB> "
+                         "<FireWireGUID>\n");
+            return 2;
+        }
+        return checkHashAb(argv[2], argv[3]);
+    }
     if (argc < 2) {
         std::fprintf(stderr,
                      "usage: itdb_dump <iTunesDB> [<out> [+pl]]\n"
                      "       itdb_dump --check-hash58 <iTunesDB> "
                      "<FireWireGUID>\n"
                      "       itdb_dump --check-hash72 <iTunesCDB> "
-                     "[<FireWireGUID>]\n");
+                     "[<FireWireGUID>]\n"
+                     "       itdb_dump --check-hashab <iTunesCDB> "
+                     "<FireWireGUID>\n");
         return 2;
     }
     auto res = podbox::parseItunesDb(argv[1]);

@@ -950,22 +950,35 @@ void App::drawRestoreModal() {
         loadedMount_ / "iPod_Control" / "iTunes" / "iTunesSD";
     const fs::path statsPath =
         loadedMount_ / "iPod_Control" / "iTunes" / "iTunesStats";
+    const bool restoreSqlite =
+        library_ && library_->hashingScheme == kChecksumHashAB;
+    const fs::path sqlitePath =
+        dbPath.parent_path() / "iTunes Library.itlp";
     std::error_code ec;
-    fs::path chosenSd, chosenStats;
+    fs::path chosenSd, chosenStats, chosenSqlite;
+    const std::string db = dbPath.string();
+    const std::string selected = chosen.string();
+    if (selected.rfind(db, 0) != 0) {
+        restoreOpen_ = false;
+        setStatus("Could not match this backup to its companion databases");
+        return;
+    }
+    const std::string suffix = selected.substr(db.size());
     if (itunesSdKind_ == ItunesSdKind::Modern) {
-        const std::string db = dbPath.string();
-        const std::string selected = chosen.string();
-        if (selected.rfind(db, 0) != 0) {
-            restoreOpen_ = false;
-            setStatus("Could not match this backup to its Shuffle database");
-            return;
-        }
-        chosenSd = sdPath.string() + selected.substr(db.size());
-        chosenStats = statsPath.string() + selected.substr(db.size());
+        chosenSd = sdPath.string() + suffix;
+        chosenStats = statsPath.string() + suffix;
         if (!fs::exists(chosenSd, ec) || !fs::exists(chosenStats, ec)) {
             restoreOpen_ = false;
             setStatus("This backup predates Shuffle support and has no matching "
                       "iTunesSD/iTunesStats backup");
+            return;
+        }
+    }
+    if (restoreSqlite) {
+        chosenSqlite = sqlitePath.string() + suffix;
+        if (!fs::is_directory(chosenSqlite, ec)) {
+            restoreOpen_ = false;
+            setStatus("This backup has no matching nano SQLite bundle");
             return;
         }
     }
@@ -977,6 +990,25 @@ void App::drawRestoreModal() {
         restoreOpen_ = false;
         setStatus("Could not stage restore: " + ec.message());
         return;
+    }
+    const fs::path restoreSqliteTmp =
+        sqlitePath.string() + ".podbox-restore-tmp";
+    if (restoreSqlite) {
+        fs::remove_all(restoreSqliteTmp, ec);
+        ec.clear();
+        fs::copy(chosenSqlite, restoreSqliteTmp,
+                 fs::copy_options::recursive |
+                     fs::copy_options::copy_symlinks, ec);
+        if (ec) {
+            const std::error_code stageError = ec;
+            std::error_code cleanup;
+            fs::remove(restoreTmp, cleanup);
+            fs::remove_all(restoreSqliteTmp, cleanup);
+            restoreOpen_ = false;
+            setStatus("Could not stage nano SQLite restore: " +
+                      stageError.message());
+            return;
+        }
     }
     const fs::path restoreSdTmp = sdPath.string() + ".podbox-restore-tmp";
     const fs::path restoreStatsTmp =
@@ -1007,6 +1039,7 @@ void App::drawRestoreModal() {
         }
     }
     rotateBackups(dbPath);  // the current state becomes undoable too
+    if (restoreSqlite) rotateBackups(sqlitePath);
     if (itunesSdKind_ == ItunesSdKind::Modern) {
         rotateBackups(sdPath);
         rotateBackups(statsPath);
@@ -1016,11 +1049,33 @@ void App::drawRestoreModal() {
     std::error_code cleanup;
     fs::remove(restoreTmp, cleanup);
     if (dbRestoreError) {
+        fs::remove_all(restoreSqliteTmp, cleanup);
         fs::remove(restoreSdTmp, cleanup);
         fs::remove(restoreStatsTmp, cleanup);
         restoreOpen_ = false;
         setStatus("Could not restore: " + dbRestoreError.message());
         return;
+    }
+    if (restoreSqlite) {
+        const fs::path sqliteOld = sqlitePath.string() + ".podbox-old";
+        fs::remove_all(sqliteOld, cleanup);
+        fs::rename(sqlitePath, sqliteOld, ec);
+        if (!ec) fs::rename(restoreSqliteTmp, sqlitePath, ec);
+        if (ec) {
+            const std::error_code sqliteRestoreError = ec;
+            std::error_code rollback;
+            fs::copy_file(dbPath.string() + ".podbox-bak.1", dbPath,
+                          fs::copy_options::overwrite_existing, rollback);
+            if (!fs::exists(sqlitePath, rollback) &&
+                fs::exists(sqliteOld, rollback))
+                fs::rename(sqliteOld, sqlitePath, rollback);
+            fs::remove_all(restoreSqliteTmp, rollback);
+            restoreOpen_ = false;
+            setStatus("Could not restore nano SQLite databases: " +
+                      sqliteRestoreError.message());
+            return;
+        }
+        fs::remove_all(sqliteOld, cleanup);
     }
     if (itunesSdKind_ == ItunesSdKind::Modern) {
         fs::copy_file(restoreSdTmp, sdPath,
@@ -1102,6 +1157,8 @@ void App::drawDeletePlaylistModal() {
     if (aqua::button("Delete", ImVec2(92, 0), true)) {
         const int idx = plEdit_.deleteIndex;
         plEdit_.deleteIndex = -2;
+        if (library_->playlists[idx].dbid)
+            removedPlaylistVoiceOver_.insert(library_->playlists[idx].dbid);
         library_->playlists.erase(library_->playlists.begin() + idx);
         if (view_ == View::Playlist && playlistIndex_ == idx)
             switchSource(View::Music);
@@ -1133,6 +1190,17 @@ void App::trackContextMenu(const Track& t) {
     ImGui::EndDisabled();
     ImGui::Separator();
 
+    if (viewingHost()) {
+        const std::string label =
+            n > 1 ? ("Add " + std::to_string(n) + " Songs to iPod")
+                  : "Add to iPod";
+        ImGui::BeginDisabled(!watcher_.device() || !library_ ||
+                             !writesSupported());
+        if (ImGui::MenuItem(label.c_str())) addSelectedHostTracksToIpod();
+        ImGui::EndDisabled();
+        ImGui::Separator();
+    }
+
     ImGui::BeginDisabled(!canEdit);
     if (!viewingHost() && ImGui::BeginMenu(
             n > 1 ? "Add These Songs to Playlist" : "Add to Playlist")) {
@@ -1140,7 +1208,7 @@ void App::trackContextMenu(const Track& t) {
         if (library_ && !library_->playlists.empty()) ImGui::Separator();
         for (int i = 0; library_ && i < int(library_->playlists.size()); ++i) {
             if (ImGui::MenuItem(library_->playlists[i].name.c_str()))
-                for (std::uint32_t id : selection_) addToPlaylist(i, id);
+                addToPlaylist(i, selection_);
         }
         ImGui::EndMenu();
     }

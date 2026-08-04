@@ -8,6 +8,8 @@
 #include "device/ipod_device.h"
 #include "itdb/hash58.h"
 #include "itdb/hash72.h"
+#include "itdb/hashab.h"
+#include "itdb/itunessqlite.h"
 #include "itdb/playcounts.h"
 #include "itdb/itunessd.h"
 #include "library/artwork.h"
@@ -126,17 +128,6 @@ void App::setStatus(const std::string& msg) {
 }
 
 void App::onFilesDropped(const std::vector<std::string>& paths) {
-    if (!watcher_.device() || !library_) {
-        setStatus("Connect an iPod before adding songs");
-        return;
-    }
-    // writeDatabase() refuses too, but catching it here means a dropped folder
-    // is not transcoded and copied onto the device before we admit we cannot
-    // record it in the database.
-    if (!writesSupported()) {
-        setStatus(writeBlockReason());
-        return;
-    }
     std::vector<fs::path> files;
     std::error_code ec;
     for (const std::string& p : paths) {
@@ -158,6 +149,22 @@ void App::onFilesDropped(const std::vector<std::string>& paths) {
         return;
     }
 
+    queueFilesToIpod(files);
+}
+
+void App::queueFilesToIpod(const std::vector<fs::path>& files) {
+    if (!watcher_.device() || !library_) {
+        setStatus("Connect an iPod before adding songs");
+        return;
+    }
+    // writeDatabase() refuses too, but catching it here means source files are
+    // not transcoded and copied before we admit that this device is read-only.
+    if (!writesSupported()) {
+        setStatus(writeBlockReason());
+        return;
+    }
+    if (files.empty()) return;
+
     // Snapshot what is already here for the worker to check against. Building
     // it from memory keeps the drop handler off the disk.
     DupeGuard guard;
@@ -172,6 +179,39 @@ void App::onFilesDropped(const std::vector<std::string>& paths) {
             if (fp.ok()) guard.hashes.insert(fp.hash);
     }
     sync_.queueAdds(files, loadedMount_, importFormat_, std::move(guard));
+}
+
+void App::addSelectedHostTracksToIpod() {
+    if (!viewingHost() || selection_.empty()) return;
+
+    std::vector<fs::path> files;
+    int unavailable = 0;
+    std::error_code ec;
+    files.reserve(selection_.size());
+    for (const std::uint32_t id : selection_) {
+        const auto found = hostIndexById_.find(id);
+        if (found == hostIndexById_.end()) {
+            ++unavailable;
+            continue;
+        }
+        const fs::path path = hostView_.tracks[found->second].location;
+        ec.clear();
+        if (!fs::is_regular_file(path, ec) || !isImportableAudioFile(path)) {
+            ++unavailable;
+            continue;
+        }
+        files.push_back(path);
+    }
+    if (files.empty()) {
+        setStatus("The selected songs are not available on this Mac");
+        return;
+    }
+
+    if (unavailable > 0)
+        setStatus("Adding " + plural(files.size(), "song", "songs") +
+                  "; skipped " +
+                  std::to_string(unavailable) + " unavailable");
+    queueFilesToIpod(files);
 }
 
 void App::applyCompletedAdds() {
@@ -216,7 +256,11 @@ bool App::appleMusicSyncing() const {
     // timestamp newer than our own last write means the change was not ours.
     const fs::path itunes = loadedMount_ / "iPod_Control" / "iTunes";
     const auto now = fs::file_time_type::clock::now();
-    for (const char* name : {"iTunesDB", "iTunesSD", "iTunesPrefs"}) {
+    for (const fs::path& name :
+         {fs::path("iTunesDB"), fs::path("iTunesCDB"), fs::path("iTunesSD"),
+          fs::path("iTunesPrefs"),
+          fs::path("iTunes Library.itlp") / "Library.itdb",
+          fs::path("iTunes Library.itlp") / "Locations.itdb"}) {
         std::error_code ec;
         const auto stamp = fs::last_write_time(itunes / name, ec);
         if (ec || stamp <= ownWriteTime_) continue;
@@ -229,29 +273,42 @@ bool App::appleMusicSyncing() const {
 }
 
 void App::rotateBackups(const fs::path& dbPath) {
-    // Five generations of a sub-megabyte file: cheap, and it means any PodBox
-    // write can be undone rather than only the very first one.
+    // Five generations mean any PodBox write can be undone. This also handles
+    // the nano 6G/7G SQLite bundle directory as one paired backup.
     constexpr int kKeep = 5;
     const std::string base = dbPath.string() + ".podbox-bak.";
     std::error_code ec;
-    fs::remove(base + std::to_string(kKeep), ec);
+    fs::remove_all(base + std::to_string(kKeep), ec);
     for (int i = kKeep - 1; i >= 1; --i)
         fs::rename(base + std::to_string(i), base + std::to_string(i + 1), ec);
-    fs::copy_file(dbPath, base + "1", ec);
+    if (fs::is_directory(dbPath, ec))
+        fs::copy(dbPath, base + "1", fs::copy_options::recursive |
+                                      fs::copy_options::copy_symlinks, ec);
+    else
+        fs::copy_file(dbPath, base + "1", ec);
 }
 
 std::vector<fs::path> App::availableBackups() const {
     std::vector<fs::path> out;
     if (loadedMount_.empty()) return out;
-    const fs::path dbPath =
-        loadedMount_ / "iPod_Control" / "iTunes" / "iTunesDB";
+    const fs::path dbPath = dbFilePath();
     std::error_code ec;
     auto usable = [&](const fs::path& candidate) {
-        if (itunesSdKind_ != ItunesSdKind::Modern) return true;
         const std::string db = dbPath.string();
         const std::string selected = candidate.string();
         if (selected.rfind(db, 0) != 0) return false;
         const std::string suffix = selected.substr(db.size());
+        if (library_ && library_->hashingScheme == kChecksumHashAB) {
+            const fs::path sqlite = dbPath.parent_path() /
+                ("iTunes Library.itlp" + suffix);
+            const ParseResult oldDb = parseItunesDb(candidate);
+            std::string error;
+            return oldDb.library &&
+                   validateItunesSqliteBundle(*oldDb.library, sqlite,
+                                              hashAbUuid_, hashAbNonce_,
+                                              &error);
+        }
+        if (itunesSdKind_ != ItunesSdKind::Modern) return true;
         const fs::path sd =
             loadedMount_ / "iPod_Control" / "iTunes" /
             ("iTunesSD" + suffix);
@@ -289,16 +346,20 @@ bool App::writesSupported() const {
     if (itunesSdKind_ == ItunesSdKind::Legacy) return false;
     if (library_->hashingScheme == kChecksumNone) return true;
     // Hash devices become writable only once we have shown we can reproduce
-    // the checksum they already carry. hashAB stays read-only.
+    // the checksum and companion databases they already carry.
     if (library_->hashingScheme == kChecksumHash58) return hash58Verified_;
     if (library_->hashingScheme == kChecksumHash72) return hash72Verified_;
+    if (library_->hashingScheme == kChecksumHashAB) return hashAbVerified_;
     return false;
 }
 
 std::string App::writeBlockReason() const {
     if (itunesSdKind_ == ItunesSdKind::Legacy)
         return "This older iPod shuffle uses an unsupported database format";
-    return "This iPod needs a hashed database — writes not yet supported";
+    if (library_ && library_->hashingScheme == kChecksumHashAB)
+        return "Could not verify this nano's hashAB/SQLite database set — "
+               "staying read-only";
+    return "This iPod needs a hashed database that could not be verified";
 }
 
 std::filesystem::path App::dbFilePath() const {
@@ -318,7 +379,11 @@ void App::verifyChecksum() {
     hash72Verified_ = false;
     hash72Iv_.clear();
     hash72Rndpart_.clear();
+    hashAbVerified_ = false;
+    hashAbUuid_.clear();
+    hashAbNonce_.clear();
     if (!library_ || loadedMount_.empty()) return;
+    if (library_->hashingScheme == kChecksumNone) return;
 
     const auto& dev = watcher_.device();
     if (!dev) return;
@@ -387,6 +452,30 @@ void App::verifyChecksum() {
         hash72Verified_ = true;
         hash72Iv_ = std::move(iv);
         hash72Rndpart_ = std::move(rndpart);
+        return;
+    }
+
+    if (library_->hashingScheme == kChecksumHashAB) {
+        std::ifstream in(dbFilePath(), std::ios::binary);
+        if (!in) return;
+        std::vector<std::uint8_t> image((std::istreambuf_iterator<char>(in)),
+                                        std::istreambuf_iterator<char>());
+        const std::vector<std::uint8_t> digest = hashAbSha1(image);
+        const std::vector<std::uint8_t> stored = storedHashAb(image);
+        const auto nonce = hashAbExtractNonce(stored, digest, guid);
+        if (!nonce) {
+            setStatus("Could not reproduce this nano's hashAB — staying read-only");
+            return;
+        }
+        const fs::path sqlite = dbFilePath().parent_path() / "iTunes Library.itlp";
+        std::string error;
+        if (!validateItunesSqliteBundle(*library_, sqlite, guid, *nonce, &error)) {
+            setStatus(error + " — staying read-only");
+            return;
+        }
+        hashAbVerified_ = true;
+        hashAbUuid_ = guid;
+        hashAbNonce_ = *nonce;
     }
 }
 
@@ -419,14 +508,36 @@ bool App::writeDatabase() {
         opts.hash72Rndpart = hash72Rndpart_;
         opts.compressed = library_->compressed;
     }
+    if (library_->hashingScheme == kChecksumHashAB) {
+        opts.hashAbUuid = hashAbUuid_;
+        opts.hashAbNonce = hashAbNonce_;
+        opts.compressed = true;
+    }
     if (!writeItunesDb(*library_, tmp, &err, opts)) {
+        setStatus(err);
+        return false;
+    }
+    const bool writeSqlite = library_->hashingScheme == kChecksumHashAB;
+    const fs::path sqlitePath =
+        dbPath.parent_path() / "iTunes Library.itlp";
+    const fs::path sqliteTmp = sqlitePath.string() + ".podbox-tmp";
+    if (writeSqlite &&
+        !writeItunesSqliteBundle(*library_, sqlitePath, sqliteTmp,
+                                 hashAbUuid_, hashAbNonce_, &err)) {
+        fs::remove(tmp, ec);
+        fs::remove_all(sqliteTmp, ec);
         setStatus(err);
         return false;
     }
     const fs::path sdTmp = sdPath.string() + ".podbox-tmp";
     const fs::path statsTmp = statsPath.string() + ".podbox-tmp";
     if (itunesSdKind_ == ItunesSdKind::Modern) {
-        if (!writeItunesSd(*library_, sdPath, sdTmp, loadedMount_, &err) ||
+        ItunesSdWriteOptions sdOptions;
+        sdOptions.refreshPlaylistVoiceOver.assign(
+            refreshPlaylistVoiceOver_.begin(),
+            refreshPlaylistVoiceOver_.end());
+        if (!writeItunesSd(*library_, sdPath, sdTmp, loadedMount_, &err,
+                           sdOptions) ||
             !writeShuffleStats(*library_, sdPath, statsPath, statsTmp, &err)) {
             fs::remove(tmp, ec);
             fs::remove(sdTmp, ec);
@@ -442,6 +553,14 @@ bool App::writeDatabase() {
     if (fs::exists(dbPath, ec) && !fs::exists(backup, ec))
         fs::copy_file(dbPath, backup, ec);
     if (fs::exists(dbPath, ec)) rotateBackups(dbPath);
+    if (writeSqlite) {
+        const fs::path sqliteBackup = sqlitePath.string() + ".podbox-backup";
+        if (fs::exists(sqlitePath, ec) && !fs::exists(sqliteBackup, ec))
+            fs::copy(sqlitePath, sqliteBackup,
+                     fs::copy_options::recursive |
+                         fs::copy_options::copy_symlinks, ec);
+        if (fs::exists(sqlitePath, ec)) rotateBackups(sqlitePath);
+    }
     if (itunesSdKind_ == ItunesSdKind::Modern) {
         const fs::path sdBackup = sdPath.string() + ".podbox-backup";
         if (fs::exists(sdPath, ec) && !fs::exists(sdBackup, ec))
@@ -454,8 +573,30 @@ bool App::writeDatabase() {
     }
     fs::rename(tmp, dbPath, ec);
     if (ec) {
-        setStatus("Could not update database: " + ec.message());
+        const std::error_code writeError = ec;
+        std::error_code cleanup;
+        fs::remove_all(sqliteTmp, cleanup);
+        setStatus("Could not update database: " + writeError.message());
         return false;
+    }
+    if (writeSqlite) {
+        const fs::path sqliteOld = sqlitePath.string() + ".podbox-old";
+        fs::remove_all(sqliteOld, ec);
+        fs::rename(sqlitePath, sqliteOld, ec);
+        if (!ec) fs::rename(sqliteTmp, sqlitePath, ec);
+        if (ec) {
+            std::error_code rollback;
+            fs::copy_file(dbPath.string() + ".podbox-bak.1", dbPath,
+                          fs::copy_options::overwrite_existing, rollback);
+            if (!fs::exists(sqlitePath, rollback) &&
+                fs::exists(sqliteOld, rollback))
+                fs::rename(sqliteOld, sqlitePath, rollback);
+            fs::remove_all(sqliteTmp, rollback);
+            setStatus("Could not update the nano SQLite databases: " +
+                      ec.message());
+            return false;
+        }
+        fs::remove_all(sqliteOld, ec);
     }
     if (itunesSdKind_ == ItunesSdKind::Modern) {
         fs::rename(sdTmp, sdPath, ec);
@@ -501,6 +642,23 @@ bool App::writeDatabase() {
     // Keep the fingerprint sidecar in step with the DB it describes.
     fingerprints_.prune(*library_);
     fingerprints_.save(loadedMount_);
+
+    // Announcements for deleted playlists are not referenced by the new
+    // iTunesSD. Remove them only after all of the paired database files have
+    // been installed successfully, so a failed write remains retryable.
+    if (itunesSdKind_ == ItunesSdKind::Modern) {
+        const fs::path announcements =
+            loadedMount_ / "iPod_Control" / "Speakable" / "Playlists";
+        for (const std::uint64_t dbid : removedPlaylistVoiceOver_) {
+            char stem[17];
+            std::snprintf(stem, sizeof(stem), "%016llX",
+                          static_cast<unsigned long long>(dbid));
+            fs::remove(announcements / (std::string(stem) + ".wav"), ec);
+            fs::remove(announcements / (std::string(stem) + ".aiff"), ec);
+        }
+    }
+    refreshPlaylistVoiceOver_.clear();
+    removedPlaylistVoiceOver_.clear();
 
     // Remember this write so appleMusicSyncing() can tell ours from theirs.
     ownWriteTime_ = fs::last_write_time(dbPath, ec);
@@ -605,7 +763,12 @@ void App::createPlaylist(std::uint32_t withTrackId) {
                 break;
             }
     }
-    if (withTrackId) pl.trackIds.push_back(withTrackId);
+    if (withTrackId) {
+        if (isSelected(withTrackId))
+            pl.trackIds = selection_;
+        else
+            pl.trackIds.push_back(withTrackId);
+    }
     library_->playlists.push_back(std::move(pl));
     playlistIndex_ = int(library_->playlists.size()) - 1;
     view_ = View::Playlist;
@@ -618,16 +781,19 @@ void App::createPlaylist(std::uint32_t withTrackId) {
     if (writeDatabase()) setStatus("Created playlist");
 }
 
-void App::addToPlaylist(int playlistIndex, std::uint32_t trackId) {
+void App::addToPlaylist(int playlistIndex,
+                        const std::vector<std::uint32_t>& trackIds) {
     if (!library_ || playlistIndex < 0 ||
-        playlistIndex >= int(library_->playlists.size()))
+        playlistIndex >= int(library_->playlists.size()) || trackIds.empty())
         return;
     auto& ids = library_->playlists[playlistIndex].trackIds;
-    ids.push_back(trackId);
+    ids.insert(ids.end(), trackIds.begin(), trackIds.end());
     if (view_ == View::Playlist && playlistIndex_ == playlistIndex)
         visibleDirty_ = true;
     if (writeDatabase())
-        setStatus("Added to “" + library_->playlists[playlistIndex].name + "”");
+        setStatus("Added " + plural(trackIds.size(), "song", "songs") +
+                  " to “" +
+                  library_->playlists[playlistIndex].name + "”");
 }
 
 bool App::isSelected(std::uint32_t trackId) const {

@@ -70,7 +70,26 @@ FetchContent_Declare(stb
   GIT_REPOSITORY https://github.com/nothings/stb.git
   GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4)
 
-FetchContent_MakeAvailable(glfw imgui taglib stb)
+# Open, independently tested HashAB implementation for nano 6G/7G. Pin the
+# exact audited revision: its large white-box lookup tables are source code,
+# and silently following a branch would make iPod database writes unsafe.
+FetchContent_Declare(hashab
+  GIT_REPOSITORY https://github.com/dstaley/hashab.git
+  GIT_TAG cc3e8aac05172a52e32da259fb31ccca9c625218)
+
+FetchContent_MakeAvailable(glfw imgui taglib stb hashab)
+
+add_library(hashab_lib STATIC
+  ${hashab_SOURCE_DIR}/src/calcHashAB.c
+  ${hashab_SOURCE_DIR}/src/generate_initial_buffer.c
+  ${hashab_SOURCE_DIR}/src/generate_key_material.c
+  ${hashab_SOURCE_DIR}/src/generate_buffer_from_state_mixing.c
+  ${hashab_SOURCE_DIR}/src/data/data.c)
+target_include_directories(hashab_lib PUBLIC ${hashab_SOURCE_DIR}/src)
+set_target_properties(hashab_lib PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(hashab_lib PRIVATE -fwrapv)
+endif()
 
 add_library(imgui_lib STATIC
   ${imgui_SOURCE_DIR}/imgui.cpp
@@ -104,9 +123,11 @@ add_library(podbox_core STATIC
   $<IF:$<BOOL:${APPLE}>,src/device/usb_serial_mac.cpp,src/device/usb_serial_stub.cpp>
   src/itdb/hash58.cpp
   src/itdb/hash72.cpp
+  src/itdb/hashab.cpp
   src/itdb/itunescdb.cpp
   src/itdb/itunesdb.cpp
   src/itdb/itunesdb_writer.cpp
+  src/itdb/itunessqlite.cpp
   src/itdb/itunessd.cpp
   src/itdb/playcounts.cpp
   src/library/artwork.cpp
@@ -130,11 +151,17 @@ if(NOT MSVC)
 endif()
 target_include_directories(podbox_core PRIVATE ${TAGLIB_INCLUDES}
   ${stb_SOURCE_DIR})
-target_link_libraries(podbox_core PUBLIC tag)
+target_link_libraries(podbox_core PUBLIC tag hashab_lib)
 # iTunesCDB is a zlib stream; on macOS this is the SDK's libz, elsewhere it
 # is found like any other dependency.
 find_package(ZLIB REQUIRED)
 target_link_libraries(podbox_core PUBLIC ZLIB::ZLIB)
+find_package(SQLite3 REQUIRED)
+if(TARGET SQLite3::SQLite3)
+  target_link_libraries(podbox_core PUBLIC SQLite3::SQLite3)
+else()
+  target_link_libraries(podbox_core PUBLIC SQLite::SQLite3)
+endif()
 if(APPLE)
   # IOKit: reads the iPod's USB serial when SysInfoExtended is missing.
   target_link_libraries(podbox_core PUBLIC "-framework IOKit"
@@ -225,6 +252,12 @@ target_link_libraries(hash58_test PRIVATE podbox_core)
 add_executable(hash72_test tools/hash72_test.cpp)
 target_link_libraries(hash72_test PRIVATE podbox_core)
 
+add_executable(hashab_test tools/hashab_test.cpp)
+target_link_libraries(hashab_test PRIVATE podbox_core)
+
+add_executable(itunessqlite_test tools/itunessqlite_test.cpp)
+target_link_libraries(itunessqlite_test PRIVATE podbox_core)
+
 add_executable(itunessd_test tools/itunessd_test.cpp)
 target_link_libraries(itunessd_test PRIVATE podbox_core)
 
@@ -268,7 +301,8 @@ endif()
 if(PODBOX_INSTALL_TOOLS)
   install(TARGETS itdb_dump podbox_add playcounts_test dedupe_test
                   library_test applemusic_test sync_test ui_test
-                  hash58_test hash72_test itunessd_test shuffle_repair
+                  hash58_test hash72_test hashab_test itunessqlite_test itunessd_test
+                  shuffle_repair
           RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
@@ -279,6 +313,8 @@ add_test(NAME dedupe COMMAND dedupe_test)
 add_test(NAME ui COMMAND ui_test)
 add_test(NAME hash58 COMMAND hash58_test)
 add_test(NAME hash72 COMMAND hash72_test)
+add_test(NAME hashab COMMAND hashab_test)
+add_test(NAME itunessqlite COMMAND itunessqlite_test)
 add_test(NAME itunessd COMMAND itunessd_test)
 
 # A DMG for releases: `cpack -G DragNDrop --config build/CPackConfig.cmake`,
