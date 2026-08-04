@@ -258,6 +258,7 @@ int main(int argc, char** argv) {
         for (size_t i = 0;
              i < a.playlists.size() && i < b.playlists.size(); ++i)
             check(a.playlists[i].name == b.playlists[i].name &&
+                      a.playlists[i].dbid == b.playlists[i].dbid &&
                       a.playlists[i].trackIds == b.playlists[i].trackIds,
                   "playlist contents");
         std::printf(mismatches ? "ROUNDTRIP FAIL (%d mismatches)\n"

@@ -3,6 +3,7 @@
 #include "audio/player.h"
 #include "device/device_watcher.h"
 #include "itdb/itunesdb.h"
+#include "itdb/itunessd.h"
 #include "library/fingerprint_store.h"
 #include "library/dedupe.h"
 #include "library/applemusic.h"
@@ -95,6 +96,7 @@ private:
     // when this is false — the UI calls it too, so the affected controls are
     // disabled rather than failing after the user commits to something.
     bool writesSupported() const;
+    std::string writeBlockReason() const;
     // Proves the device's checksum against its own database before ever
     // writing one. The iPod already accepts what is on it, so recomputing
     // that file's checksum and comparing it to the stored one settles whether
@@ -203,6 +205,11 @@ private:
     // write signs with them so the device accepts the result.
     std::vector<std::uint8_t> hash72Iv_;
     std::vector<std::uint8_t> hash72Rndpart_;
+
+    // A 3rd/4th-generation Shuffle has both iTunesDB (metadata used by the
+    // desktop) and modern iTunesSD (the database its firmware plays). Older
+    // Shuffles also have iTunesSD but use an incompatible format.
+    ItunesSdKind itunesSdKind_ = ItunesSdKind::None;
 
     std::string libraryError_;
     std::filesystem::path loadedMount_;

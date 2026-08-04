@@ -973,7 +973,12 @@ void App::drawDeviceView(const IpodInfo& dev) {
     if (ImGui::Button("Restore Database…")) restoreOpen_ = true;
     ImGui::EndDisabled();
     ImGui::PushFont(fonts_.label);
-    if (!writesSupported() && library_ &&
+    if (itunesSdKind_ == ItunesSdKind::Legacy)
+        ImGui::TextColored(v4(pal::Warning),
+                           "This older iPod shuffle uses a different iTunesSD "
+                           "format, so it is read-only here. Nothing on the "
+                           "device will be changed.");
+    else if (!writesSupported() && library_ &&
         (library_->hashingScheme == kChecksumHash58 ||
          library_->hashingScheme == kChecksumHash72))
         ImGui::TextColored(v4(pal::Warning),
@@ -1217,8 +1222,7 @@ if (selectedTrackId_ && !deleteRequestId_ &&
     // "Remove from iPod" path stays in the context menu to avoid
     // accidental file deletion.
     if (!viewingHost() && !writesSupported()) {
-        setStatus(
-            "This iPod needs a hashed database — writes not yet supported");
+        setStatus(writeBlockReason());
     } else if (view_ == View::Playlist && playlistIndex_ >= 0) {
         auto& ids = library_->playlists[playlistIndex_].trackIds;
         int removed = 0;

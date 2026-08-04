@@ -153,6 +153,8 @@ void parsePlaylists(const Buf& b, size_t mhlp, Library& lib) {
 
         Playlist pl;
         pl.isMaster = b.u8(pos + 20) != 0;
+        pl.dbid = std::uint64_t(b.u32(pos + 28)) |
+                  (std::uint64_t(b.u32(pos + 32)) << 32);
 
         size_t p = pos + phLen;
         for (std::uint32_t m = 0; m < nMhods && b.tagIs(p, "mhod"); ++m) {

@@ -9,6 +9,7 @@
 #include "itdb/hash58.h"
 #include "itdb/hash72.h"
 #include "itdb/playcounts.h"
+#include "itdb/itunessd.h"
 #include "library/artwork.h"
 #include "library/dedupe.h"
 #include "library/metadata.h"
@@ -26,6 +27,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <chrono>
 #include <cstdio>
@@ -132,7 +134,7 @@ void App::onFilesDropped(const std::vector<std::string>& paths) {
     // is not transcoded and copied onto the device before we admit we cannot
     // record it in the database.
     if (!writesSupported()) {
-        setStatus("This iPod needs a hashed database — writes not yet supported");
+        setStatus(writeBlockReason());
         return;
     }
     std::vector<fs::path> files;
@@ -214,7 +216,7 @@ bool App::appleMusicSyncing() const {
     // timestamp newer than our own last write means the change was not ours.
     const fs::path itunes = loadedMount_ / "iPod_Control" / "iTunes";
     const auto now = fs::file_time_type::clock::now();
-    for (const char* name : {"iTunesDB", "iTunesPrefs"}) {
+    for (const char* name : {"iTunesDB", "iTunesSD", "iTunesPrefs"}) {
         std::error_code ec;
         const auto stamp = fs::last_write_time(itunes / name, ec);
         if (ec || stamp <= ownWriteTime_) continue;
@@ -244,25 +246,59 @@ std::vector<fs::path> App::availableBackups() const {
     const fs::path dbPath =
         loadedMount_ / "iPod_Control" / "iTunes" / "iTunesDB";
     std::error_code ec;
+    auto usable = [&](const fs::path& candidate) {
+        if (itunesSdKind_ != ItunesSdKind::Modern) return true;
+        const std::string db = dbPath.string();
+        const std::string selected = candidate.string();
+        if (selected.rfind(db, 0) != 0) return false;
+        const std::string suffix = selected.substr(db.size());
+        const fs::path sd =
+            loadedMount_ / "iPod_Control" / "iTunes" /
+            ("iTunesSD" + suffix);
+        const fs::path stats =
+            loadedMount_ / "iPod_Control" / "iTunes" /
+            ("iTunesStats" + suffix);
+        const ParseResult oldDb = parseItunesDb(candidate);
+        const auto oldSd = parseItunesSd(sd);
+        if (!oldDb.library || !oldSd ||
+            oldDb.library->tracks.size() != oldSd->tracks.size())
+            return false;
+        std::ifstream in(stats, std::ios::binary);
+        std::array<unsigned char, 4> count{};
+        if (!in.read(reinterpret_cast<char*>(count.data()), count.size()))
+            return false;
+        const std::uint32_t statsCount =
+            count[0] | (std::uint32_t(count[1]) << 8) |
+            (std::uint32_t(count[2]) << 16) |
+            (std::uint32_t(count[3]) << 24);
+        return statsCount == oldSd->tracks.size();
+    };
     // The one-shot backup from before rotation existed is still the oldest and
     // most valuable snapshot, so keep offering it.
     const fs::path legacy = dbPath.string() + ".podbox-backup";
     for (int i = 1; i <= 5; ++i) {
         const fs::path p = dbPath.string() + ".podbox-bak." + std::to_string(i);
-        if (fs::exists(p, ec)) out.push_back(p);
+        if (fs::exists(p, ec) && usable(p)) out.push_back(p);
     }
-    if (fs::exists(legacy, ec)) out.push_back(legacy);
+    if (fs::exists(legacy, ec) && usable(legacy)) out.push_back(legacy);
     return out;
 }
 
 bool App::writesSupported() const {
     if (!library_) return false;
+    if (itunesSdKind_ == ItunesSdKind::Legacy) return false;
     if (library_->hashingScheme == kChecksumNone) return true;
     // Hash devices become writable only once we have shown we can reproduce
     // the checksum they already carry. hashAB stays read-only.
     if (library_->hashingScheme == kChecksumHash58) return hash58Verified_;
     if (library_->hashingScheme == kChecksumHash72) return hash72Verified_;
     return false;
+}
+
+std::string App::writeBlockReason() const {
+    if (itunesSdKind_ == ItunesSdKind::Legacy)
+        return "This older iPod shuffle uses an unsupported database format";
+    return "This iPod needs a hashed database — writes not yet supported";
 }
 
 std::filesystem::path App::dbFilePath() const {
@@ -360,7 +396,7 @@ bool App::writeDatabase() {
     // drag-and-drop path, which left deletes, ratings, playlist edits, sync and
     // restore free to write an unhashed database to a device that needs one.
     if (!writesSupported()) {
-        setStatus("This iPod needs a hashed database — writes not yet supported");
+        setStatus(writeBlockReason());
         return false;
     }
     if (appleMusicSyncing()) {
@@ -368,13 +404,11 @@ bool App::writeDatabase() {
         return false;
     }
     const fs::path dbPath = dbFilePath();
+    const fs::path sdPath =
+        loadedMount_ / "iPod_Control" / "iTunes" / "iTunesSD";
+    const fs::path statsPath =
+        loadedMount_ / "iPod_Control" / "iTunes" / "iTunesStats";
     std::error_code ec;
-    // Keep the original iTunes-written DB around, once.
-    const fs::path backup = dbPath.string() + ".podbox-backup";
-    if (fs::exists(dbPath, ec) && !fs::exists(backup, ec))
-        fs::copy_file(dbPath, backup, ec);
-    if (fs::exists(dbPath, ec)) rotateBackups(dbPath);
-
     const fs::path tmp = dbPath.string() + ".podbox-tmp";
     std::string err;
     WriteOptions opts;
@@ -389,10 +423,65 @@ bool App::writeDatabase() {
         setStatus(err);
         return false;
     }
+    const fs::path sdTmp = sdPath.string() + ".podbox-tmp";
+    const fs::path statsTmp = statsPath.string() + ".podbox-tmp";
+    if (itunesSdKind_ == ItunesSdKind::Modern) {
+        if (!writeItunesSd(*library_, sdPath, sdTmp, loadedMount_, &err) ||
+            !writeShuffleStats(*library_, sdPath, statsPath, statsTmp, &err)) {
+            fs::remove(tmp, ec);
+            fs::remove(sdTmp, ec);
+            fs::remove(statsTmp, ec);
+            setStatus(err);
+            return false;
+        }
+    }
+    // Every replacement file is ready before backups rotate or any live
+    // database changes. A failed speech synthesis therefore remains a true
+    // no-op from the user's point of view.
+    const fs::path backup = dbPath.string() + ".podbox-backup";
+    if (fs::exists(dbPath, ec) && !fs::exists(backup, ec))
+        fs::copy_file(dbPath, backup, ec);
+    if (fs::exists(dbPath, ec)) rotateBackups(dbPath);
+    if (itunesSdKind_ == ItunesSdKind::Modern) {
+        const fs::path sdBackup = sdPath.string() + ".podbox-backup";
+        if (fs::exists(sdPath, ec) && !fs::exists(sdBackup, ec))
+            fs::copy_file(sdPath, sdBackup, ec);
+        if (fs::exists(sdPath, ec)) rotateBackups(sdPath);
+        const fs::path statsBackup = statsPath.string() + ".podbox-backup";
+        if (fs::exists(statsPath, ec) && !fs::exists(statsBackup, ec))
+            fs::copy_file(statsPath, statsBackup, ec);
+        if (fs::exists(statsPath, ec)) rotateBackups(statsPath);
+    }
     fs::rename(tmp, dbPath, ec);
     if (ec) {
         setStatus("Could not update database: " + ec.message());
         return false;
+    }
+    if (itunesSdKind_ == ItunesSdKind::Modern) {
+        fs::rename(sdTmp, sdPath, ec);
+        if (ec) {
+            // Keep the two databases paired. The rotating backup was made
+            // immediately before this write and is the old iTunesDB.
+            const fs::path previous = dbPath.string() + ".podbox-bak.1";
+            std::error_code rollback;
+            fs::copy_file(previous, dbPath,
+                          fs::copy_options::overwrite_existing, rollback);
+            setStatus("Could not update the Shuffle database: " + ec.message());
+            return false;
+        }
+        fs::rename(statsTmp, statsPath, ec);
+        if (ec) {
+            std::error_code rollback;
+            fs::copy_file(dbPath.string() + ".podbox-bak.1", dbPath,
+                          fs::copy_options::overwrite_existing, rollback);
+            fs::copy_file(sdPath.string() + ".podbox-bak.1", sdPath,
+                          fs::copy_options::overwrite_existing, rollback);
+            if (fs::exists(statsPath.string() + ".podbox-bak.1", rollback))
+                fs::copy_file(statsPath.string() + ".podbox-bak.1", statsPath,
+                              fs::copy_options::overwrite_existing, rollback);
+            setStatus("Could not update Shuffle statistics: " + ec.message());
+            return false;
+        }
     }
     if (library_->compressed) {
         // A compressed-database device keeps its iTunesDB as a zero-byte
@@ -499,7 +588,10 @@ int App::performDeleteMany(
 
 void App::createPlaylist(std::uint32_t withTrackId) {
     if (!library_) return;
+    static std::mt19937_64 rng{std::random_device{}()};
     Playlist pl;
+    pl.dbid = rng();
+    if (!pl.dbid) pl.dbid = 1;
     pl.name = "New Playlist";
     // Disambiguate against existing names.
     int suffix = 1;
@@ -680,6 +772,7 @@ void App::updateLibrary() {
             libraryError_.clear();
             loadedMount_.clear();
             trackIndexById_.clear();
+            itunesSdKind_ = ItunesSdKind::None;
             view_ = hostView_.tracks.empty() ? View::Device : View::Library;
             playlistIndex_ = -1;
             visibleDirty_ = true;
@@ -688,10 +781,16 @@ void App::updateLibrary() {
     }
     if (dev->mountPoint == loadedMount_) return;
     loadedMount_ = dev->mountPoint;
+    itunesSdKind_ = detectItunesSd(
+        loadedMount_ / "iPod_Control" / "iTunes" / "iTunesSD");
 
     ParseResult res = parseItunesDb(dbFilePath());
     library_ = std::move(res.library);
     libraryError_ = res.error;
+    if (library_ && itunesSdKind_ == ItunesSdKind::Modern)
+        reconcileShufflePlaylistIds(
+            *library_,
+            loadedMount_ / "iPod_Control" / "iTunes" / "iTunesSD");
     trackIndexById_.clear();
     fingerprints_.load(loadedMount_);
     nextTrackId_ = 100;

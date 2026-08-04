@@ -2,6 +2,7 @@
 // its iTunesDB. Same pipeline as the GUI drag-and-drop; used for testing.
 //   podbox_add <mount> [--alac|--mp3] <file>...
 #include "itdb/itunesdb.h"
+#include "itdb/itunessd.h"
 #include "library/metadata.h"
 #include "library/transcode.h"
 #include "sync/sync_engine.h"
@@ -20,6 +21,16 @@ int main(int argc, char** argv) {
     }
     const fs::path mount = argv[1];
     const fs::path dbPath = mount / "iPod_Control" / "iTunes" / "iTunesDB";
+    const fs::path sdPath = mount / "iPod_Control" / "iTunes" / "iTunesSD";
+    const fs::path statsPath =
+        mount / "iPod_Control" / "iTunes" / "iTunesStats";
+    const podbox::ItunesSdKind sdKind = podbox::detectItunesSd(sdPath);
+    if (sdKind == podbox::ItunesSdKind::Legacy) {
+        std::fprintf(stderr,
+                     "error: this older iPod shuffle uses an unsupported "
+                     "iTunesSD format\n");
+        return 1;
+    }
 
     podbox::ImportFormat fmt = podbox::ImportFormat::Original;
     int firstFile = 2;
@@ -88,9 +99,25 @@ int main(int argc, char** argv) {
     const fs::path backup = dbPath.string() + ".podbox-backup";
     std::error_code ec;
     if (!fs::exists(backup, ec)) fs::copy_file(dbPath, backup, ec);
+    if (sdKind == podbox::ItunesSdKind::Modern) {
+        const fs::path sdBackup = sdPath.string() + ".podbox-backup";
+        if (!fs::exists(sdBackup, ec)) fs::copy_file(sdPath, sdBackup, ec);
+        const fs::path statsBackup = statsPath.string() + ".podbox-backup";
+        if (fs::exists(statsPath, ec) && !fs::exists(statsBackup, ec))
+            fs::copy_file(statsPath, statsBackup, ec);
+    }
     const fs::path tmp = dbPath.string() + ".podbox-tmp";
     std::string err;
     if (!podbox::writeItunesDb(lib, tmp, &err)) {
+        std::fprintf(stderr, "error: %s\n", err.c_str());
+        return 1;
+    }
+    const fs::path sdTmp = sdPath.string() + ".podbox-tmp";
+    const fs::path statsTmp = statsPath.string() + ".podbox-tmp";
+    if (sdKind == podbox::ItunesSdKind::Modern &&
+        (!podbox::writeItunesSd(lib, sdPath, sdTmp, mount, &err) ||
+         !podbox::writeShuffleStats(lib, sdPath, statsPath, statsTmp, &err))) {
+        fs::remove(tmp, ec);
         std::fprintf(stderr, "error: %s\n", err.c_str());
         return 1;
     }
@@ -99,6 +126,20 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "error: rename failed: %s\n",
                      ec.message().c_str());
         return 1;
+    }
+    if (sdKind == podbox::ItunesSdKind::Modern) {
+        fs::rename(sdTmp, sdPath, ec);
+        if (ec) {
+            std::fprintf(stderr, "error: Shuffle database rename failed: %s\n",
+                         ec.message().c_str());
+            return 1;
+        }
+        fs::rename(statsTmp, statsPath, ec);
+        if (ec) {
+            std::fprintf(stderr, "error: Shuffle statistics rename failed: %s\n",
+                         ec.message().c_str());
+            return 1;
+        }
     }
     std::printf("database updated: %zu tracks\n", lib.tracks.size());
     return 0;

@@ -937,7 +937,7 @@ void App::drawRestoreModal() {
     // just as unreadable. (A backup taken by iTunes would be fine, but we
     // cannot tell the two apart, and guessing wrong bricks the library.)
     if (!writesSupported()) {
-        setStatus("This iPod needs a hashed database — writes not yet supported");
+        setStatus(writeBlockReason());
         return;
     }
     if (appleMusicSyncing()) {
@@ -946,13 +946,116 @@ void App::drawRestoreModal() {
         return;
     }
     const fs::path dbPath = dbFilePath();
+    const fs::path sdPath =
+        loadedMount_ / "iPod_Control" / "iTunes" / "iTunesSD";
+    const fs::path statsPath =
+        loadedMount_ / "iPod_Control" / "iTunes" / "iTunesStats";
     std::error_code ec;
-    rotateBackups(dbPath);  // the current state becomes undoable too
-    fs::copy_file(chosen, dbPath, fs::copy_options::overwrite_existing, ec);
+    fs::path chosenSd, chosenStats;
+    if (itunesSdKind_ == ItunesSdKind::Modern) {
+        const std::string db = dbPath.string();
+        const std::string selected = chosen.string();
+        if (selected.rfind(db, 0) != 0) {
+            restoreOpen_ = false;
+            setStatus("Could not match this backup to its Shuffle database");
+            return;
+        }
+        chosenSd = sdPath.string() + selected.substr(db.size());
+        chosenStats = statsPath.string() + selected.substr(db.size());
+        if (!fs::exists(chosenSd, ec) || !fs::exists(chosenStats, ec)) {
+            restoreOpen_ = false;
+            setStatus("This backup predates Shuffle support and has no matching "
+                      "iTunesSD/iTunesStats backup");
+            return;
+        }
+    }
+    // A selected .bak.1 becomes .bak.2 when rotation starts, so stage the
+    // chosen pair before rotating the live state into .bak.1.
+    const fs::path restoreTmp = dbPath.string() + ".podbox-restore-tmp";
+    fs::copy_file(chosen, restoreTmp, fs::copy_options::overwrite_existing, ec);
     if (ec) {
         restoreOpen_ = false;
-        setStatus("Could not restore: " + ec.message());
+        setStatus("Could not stage restore: " + ec.message());
         return;
+    }
+    const fs::path restoreSdTmp = sdPath.string() + ".podbox-restore-tmp";
+    const fs::path restoreStatsTmp =
+        statsPath.string() + ".podbox-restore-tmp";
+    if (itunesSdKind_ == ItunesSdKind::Modern) {
+        fs::copy_file(chosenSd, restoreSdTmp,
+                      fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            const std::error_code stageError = ec;
+            std::error_code cleanup;
+            fs::remove(restoreTmp, cleanup);
+            restoreOpen_ = false;
+            setStatus("Could not stage Shuffle restore: " +
+                      stageError.message());
+            return;
+        }
+        fs::copy_file(chosenStats, restoreStatsTmp,
+                      fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            const std::error_code stageError = ec;
+            std::error_code cleanup;
+            fs::remove(restoreTmp, cleanup);
+            fs::remove(restoreSdTmp, cleanup);
+            restoreOpen_ = false;
+            setStatus("Could not stage Shuffle statistics restore: " +
+                      stageError.message());
+            return;
+        }
+    }
+    rotateBackups(dbPath);  // the current state becomes undoable too
+    if (itunesSdKind_ == ItunesSdKind::Modern) {
+        rotateBackups(sdPath);
+        rotateBackups(statsPath);
+    }
+    fs::copy_file(restoreTmp, dbPath, fs::copy_options::overwrite_existing, ec);
+    const std::error_code dbRestoreError = ec;
+    std::error_code cleanup;
+    fs::remove(restoreTmp, cleanup);
+    if (dbRestoreError) {
+        fs::remove(restoreSdTmp, cleanup);
+        fs::remove(restoreStatsTmp, cleanup);
+        restoreOpen_ = false;
+        setStatus("Could not restore: " + dbRestoreError.message());
+        return;
+    }
+    if (itunesSdKind_ == ItunesSdKind::Modern) {
+        fs::copy_file(restoreSdTmp, sdPath,
+                      fs::copy_options::overwrite_existing, ec);
+        const std::error_code sdRestoreError = ec;
+        fs::remove(restoreSdTmp, cleanup);
+        if (sdRestoreError) {
+            fs::remove(restoreStatsTmp, cleanup);
+            std::error_code rollback;
+            fs::copy_file(dbPath.string() + ".podbox-bak.1", dbPath,
+                          fs::copy_options::overwrite_existing, rollback);
+            fs::copy_file(sdPath.string() + ".podbox-bak.1", sdPath,
+                          fs::copy_options::overwrite_existing, rollback);
+            restoreOpen_ = false;
+            setStatus("Could not restore Shuffle database: " +
+                      sdRestoreError.message());
+            return;
+        }
+        fs::copy_file(restoreStatsTmp, statsPath,
+                      fs::copy_options::overwrite_existing, ec);
+        const std::error_code statsRestoreError = ec;
+        fs::remove(restoreStatsTmp, cleanup);
+        if (statsRestoreError) {
+            std::error_code rollback;
+            fs::copy_file(dbPath.string() + ".podbox-bak.1", dbPath,
+                          fs::copy_options::overwrite_existing, rollback);
+            fs::copy_file(sdPath.string() + ".podbox-bak.1", sdPath,
+                          fs::copy_options::overwrite_existing, rollback);
+            fs::copy_file(statsPath.string() + ".podbox-bak.1", statsPath,
+                          fs::copy_options::overwrite_existing, rollback);
+            restoreOpen_ = false;
+            setStatus("Could not restore Shuffle statistics: " +
+                      statsRestoreError.message());
+            return;
+        }
     }
     // On a compressed-database device the placeholder iTunesDB must stay a
     // zero-byte placeholder, or the device reads the wrong file.

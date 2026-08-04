@@ -107,6 +107,7 @@ add_library(podbox_core STATIC
   src/itdb/itunescdb.cpp
   src/itdb/itunesdb.cpp
   src/itdb/itunesdb_writer.cpp
+  src/itdb/itunessd.cpp
   src/itdb/playcounts.cpp
   src/library/artwork.cpp
   src/library/dedupe.cpp
@@ -223,6 +224,12 @@ target_link_libraries(hash58_test PRIVATE podbox_core)
 add_executable(hash72_test tools/hash72_test.cpp)
 target_link_libraries(hash72_test PRIVATE podbox_core)
 
+add_executable(itunessd_test tools/itunessd_test.cpp)
+target_link_libraries(itunessd_test PRIVATE podbox_core)
+
+add_executable(shuffle_repair tools/shuffle_repair.cpp)
+target_link_libraries(shuffle_repair PRIVATE podbox_core)
+
 if(APPLE)
   add_executable(audio_test tools/audio_test.cpp ${PODBOX_AUDIO_SRC})
   target_include_directories(audio_test PRIVATE src)
@@ -260,7 +267,7 @@ endif()
 if(PODBOX_INSTALL_TOOLS)
   install(TARGETS itdb_dump podbox_add playcounts_test dedupe_test
                   library_test applemusic_test sync_test ui_test
-                  hash58_test hash72_test
+                  hash58_test hash72_test itunessd_test shuffle_repair
           RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
@@ -271,6 +278,7 @@ add_test(NAME dedupe COMMAND dedupe_test)
 add_test(NAME ui COMMAND ui_test)
 add_test(NAME hash58 COMMAND hash58_test)
 add_test(NAME hash72 COMMAND hash72_test)
+add_test(NAME itunessd COMMAND itunessd_test)
 
 # A DMG for releases: `cpack -G DragNDrop --config build/CPackConfig.cmake`,
 # or `cmake --build build --target package`. Unsigned, like the app itself,

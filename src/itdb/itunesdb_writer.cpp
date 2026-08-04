@@ -250,7 +250,8 @@ bool writeItunesDb(const Library& lib, const fs::path& path,
         lib.masterName.empty() ? "iPod" : lib.masterName;
     append(mhlp, mhyp(masterName, true, allIds, now, rng(), {}, 0));
     for (const Playlist& pl : lib.playlists)
-        append(mhlp, mhyp(pl.name, false, pl.trackIds, now, rng(),
+        append(mhlp, mhyp(pl.name, false, pl.trackIds, now,
+                          pl.dbid ? pl.dbid : rng(),
                           pl.extraMhods, pl.extraMhodCount));
 
     // Everything else the device had — podcasts, the album list, Apple

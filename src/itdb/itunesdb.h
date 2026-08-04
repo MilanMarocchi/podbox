@@ -69,6 +69,9 @@ struct Track {
 struct Playlist {
     std::string name;
     bool isMaster = false;
+    // Persistent playlist id. Shuffle 3G/4G uses this same value to locate
+    // the spoken playlist name in iPod_Control/Speakable/Playlists.
+    std::uint64_t dbid = 0;
     std::vector<std::uint32_t> trackIds;
     // Smart-playlist criteria (mhod 50/51) and anything else unmodelled.
     // Without this a smart playlist is flattened to a static snapshot the

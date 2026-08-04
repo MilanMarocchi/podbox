@@ -24,6 +24,9 @@ styled after iTunes 10.
   with TagLib and files are copied into the iPod's music folders with
   iTunes-style scrambled names. Copies run on a background thread with progress
   shown in the toolbar.
+- **iPod shuffle 3G/4G** writes the firmware's `iTunesSD` alongside
+  `iTunesDB`. Missing track and playlist announcements are synthesized as
+  22.05 kHz mono VoiceOver WAV files using macOS's installed system voice.
 - **Delete songs** from the device (right-click → *Remove from iPod*, or select
   and press Delete), with a confirmation dialog.
 - **Playlists** — create, rename, delete, add/remove tracks (right-click a song
@@ -100,8 +103,8 @@ forever.
 ## Supported devices
 
 PodBox reads the library of **any classic-line iPod** — 1st through 5.5th
-generation, iPod mini, iPod photo, and iPod nano/classic — by parsing the
-`iTunesDB` directly.
+generation, iPod mini, iPod photo, iPod nano/classic, and iPod shuffle 3G/4G —
+by parsing the `iTunesDB` directly.
 
 **Writing** (adding/removing songs and playlists) works without qualification
 on iPods whose database needs no checksum: **iPod 1st–5.5th generation, iPod
@@ -141,7 +144,8 @@ whichever scheme your iPod declares, so you can tell which case you are in.
 | iPod classic (6G/7G), nano 3G/4G | ✅ | ⚠️ *hash58*, self-verified on connect |
 | iPod nano 5G | ✅ | ⚠️ *hash72* over `iTunesCDB`, self-verified on connect |
 | iPod nano 6G/7G (*hashAB*) | ✅ | ⛔ read-only |
-| iPod shuffle | — | — separate `iTunesSD` format (planned) |
+| iPod shuffle 3G/4G | ✅ | ✅ `iTunesDB` + `iTunesSD` + VoiceOver |
+| iPod shuffle 1G/2G | — | ⛔ read-only (legacy `iTunesSD`) |
 | iPod touch / iPhone | — | — different sync protocol, out of scope |
 
 The iPod must be mounted as a disk. Windows-formatted (FAT32) iPods mount
@@ -304,8 +308,10 @@ The build also produces small utilities used for testing. With Nix they are in
 | `applemusic_test` | `[summary\|list <n>\|copy <n>\|copy all]` — defaults to `summary`, which reads everything and writes nothing. `copy` writes into `~/Music/PodBox`. |
 | `sync_test` | `<ipod-mount> [--remove]` — print the sync plan. Entirely read-only; needs a saved Mac library. |
 | `dedupe_test` | `[<music-dir> [verbose]]`, or `--fp <file>...` to print and compare fingerprints. The only tool with real assertions; exits non-zero on failure. |
+| `itunessd_test` | No arguments for regression tests, or `<iTunesDB> <existing-iTunesSD> <output>` to validate a proposed Shuffle database without touching the device. |
 
-`dedupe_test` is registered with CTest, so `ctest --test-dir build` runs it.
+The assertion-based tools are registered with CTest, so
+`ctest --test-dir build` runs them.
 
 ## How it works
 
@@ -327,7 +333,6 @@ file that is merged on connect.
 - Podcast episode metadata (description, release date) and audiobook
   resume-position, which need parts of the database PodBox carries through
   verbatim but does not yet model
-- iPod shuffle (`iTunesSD`) support
 - Code signing and notarisation, so Gatekeeper stops complaining
 - Linux build (audio backend + device layer)
 
