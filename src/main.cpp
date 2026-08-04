@@ -61,6 +61,7 @@ int main() {
 
     podbox::App app(fonts);
     app.setWindow(window);
+    podbox::installMediaKeyHandler();
     glfwSetWindowUserPointer(window, &app);
     glfwSetDropCallback(window, [](GLFWwindow* w, int count,
                                    const char** paths) {
@@ -78,11 +79,24 @@ int main() {
         else
             glfwWaitEventsTimeout(0.2);
 
+        for (;;) {
+            const podbox::MediaKeyCommand command =
+                podbox::takeMediaKeyCommand();
+            if (command == podbox::MediaKeyCommand::None) break;
+            if (command == podbox::MediaKeyCommand::Play)
+                app.play();
+            else if (command == podbox::MediaKeyCommand::Pause)
+                app.pause();
+            else
+                app.togglePlayback();
+        }
+
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
         app.frame();
+        podbox::setMediaKeyPlaybackState(app.animating());
 
         ImGui::Render();
         int fbWidth = 0, fbHeight = 0;
@@ -97,6 +111,7 @@ int main() {
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
+    podbox::removeMediaKeyHandler();
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;

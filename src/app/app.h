@@ -49,6 +49,13 @@ public:
     // so the main loop can pick a shorter event-wait timeout.
     bool animating() const;
 
+    // System media commands use the same playback decisions as the toolbar.
+    // These are public because macOS delivers them at the application level,
+    // outside the immediate-mode UI frame.
+    void play();
+    void pause();
+    void togglePlayback();
+
 private:
     // Which source the main panel is showing. Library is the Mac-side
     // collection; the rest are the connected iPod's. Music, Podcasts and

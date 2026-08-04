@@ -6,5 +6,9 @@ namespace podbox {
 // of moving the window.
 void useUnifiedTitlebar(GLFWwindow*) {}
 void dragWindowWithCurrentEvent(GLFWwindow*) {}
+void installMediaKeyHandler() {}
+void removeMediaKeyHandler() {}
+MediaKeyCommand takeMediaKeyCommand() { return MediaKeyCommand::None; }
+void setMediaKeyPlaybackState(bool) {}
 
 }  // namespace podbox

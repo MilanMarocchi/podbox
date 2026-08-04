@@ -189,7 +189,8 @@ endif()
 
 if(APPLE)
   target_link_libraries(podbox PRIVATE
-    "-framework AVFoundation" "-framework Foundation" "-framework Cocoa")
+    "-framework AVFoundation" "-framework Foundation" "-framework Cocoa"
+    "-framework MediaPlayer")
 endif()
 
 add_executable(itdb_dump tools/itdb_dump.cpp)

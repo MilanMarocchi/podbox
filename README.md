@@ -27,6 +27,8 @@ styled after iTunes 10.
 - **iPod shuffle 3G/4G** writes the firmware's `iTunesSD` alongside
   `iTunesDB`. Missing track and playlist announcements are synthesized as
   22.05 kHz mono VoiceOver WAV files using macOS's installed system voice.
+- **Mac media keys** control PodBox playback through macOS's system
+  now-playing interface, including while the window is in the background.
 - **Delete songs** from the device (right-click → *Remove from iPod*, or select
   and press Delete), with a confirmation dialog.
 - **Playlists** — create, rename, delete, add/remove tracks (right-click a song

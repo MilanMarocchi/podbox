@@ -684,6 +684,38 @@ bool App::animating() const {
     return player_ && player_->state() == PlaybackState::Playing;
 }
 
+void App::play() {
+    if (!player_) return;
+    const PlaybackState state = player_->state();
+    if (state == PlaybackState::Playing) return;
+    if (state == PlaybackState::Paused) {
+        player_->play();
+        return;
+    }
+    if (playingTrackId_) {
+        playTrackId(playingTrackId_);
+        return;
+    }
+    if (selectedTrackId_) {
+        playTrackId(selectedTrackId_);
+        return;
+    }
+    const Library* shown = shownLibrary();
+    if (shown && !visible_.empty())
+        playTrackId(shown->tracks[visible_[0].second].id);
+}
+
+void App::pause() {
+    if (player_) player_->pause();
+}
+
+void App::togglePlayback() {
+    if (player_ && player_->state() == PlaybackState::Playing)
+        pause();
+    else
+        play();
+}
+
 void App::updatePlayback() {
     if (!player_ || playingTrackId_ == 0) return;
     if (!player_->reachedEnd()) return;

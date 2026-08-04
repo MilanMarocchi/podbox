@@ -183,18 +183,7 @@ void App::drawTransport() {
                                   ImVec2(c.x - 5.5f, c.y + 7.0f),
                                   ImVec2(c.x + 5.5f, c.y), glyph);
         }
-        if (clicked) {
-            if (st == PlaybackState::Playing)
-                player_->pause();
-            else if (st == PlaybackState::Paused)
-                player_->play();
-            else if (playingTrackId_)
-                playTrackId(playingTrackId_);
-            else if (selectedTrackId_)
-                playTrackId(selectedTrackId_);
-            else if (haveList)
-                playTrackId(shownLib->tracks[visible_[0].second].id);
-        }
+        if (clicked) togglePlayback();
     }
     {
         const ImVec2 c = disc("##next", kNextRadius);
