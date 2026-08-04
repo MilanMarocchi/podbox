@@ -3,7 +3,7 @@
 Orientation for anyone changing the code. For what PodBox *does*, see the
 [README](../README.md).
 
-Roughly 8,500 lines of C++20 across seven subsystems, plus Dear ImGui, GLFW,
+Roughly 11,000 lines of C++20 across seven subsystems, plus Dear ImGui, GLFW,
 TagLib and stb. No framework, no plugin system, no dependency injection —
 `main.cpp` builds an `App` and calls `frame()` in a loop.
 
@@ -13,8 +13,8 @@ TagLib and stb. No framework, no plugin system, no dependency injection —
 src/
   main.cpp        window + GL context + the frame loop
   app/            all UI and all mutation logic (app.cpp is the big one)
-  ui/             theme (palette, fonts, ImGui style) and Aqua drawing
-  itdb/           iTunesDB reader, writer, and the Play Counts merge
+  ui/             theme, Aqua drawing, and native macOS window/media commands
+  itdb/           iTunesDB/iTunesSD readers and writers, and play-count merges
   device/         mount detection, the model table, eject
   library/        everything about audio files and the Mac-side collection
   sync/           diffing the two libraries and copying between them
@@ -42,8 +42,17 @@ mhbd                        database
               └ mhip        one entry per track in the playlist
 ```
 
-`itunesdb.cpp` parses it, `itunesdb_writer.cpp` writes it back,
+`itunesdb.cpp` parses it, `itunesdb_writer.cpp` writes it back, and
 `playcounts.cpp` folds in the separate `Play Counts` file the firmware writes.
+
+A 3rd/4th-generation Shuffle additionally boots from `iTunesSD`, with one
+positional `iTunesStats` record per indexed track. `itunessd.cpp` parses the
+modern `bdhs` form, preserves Apple-written track and playlist records where
+possible, adds records for new tracks, remaps the positional stats, and uses
+macOS `say` to synthesize missing 22.05 kHz mono VoiceOver WAV files. The
+legacy 1G/2G format is detected but stays read-only. `App::writeDatabase()`
+stages and validates `iTunesDB`, `iTunesSD`, and `iTunesStats`, then installs or
+rolls back the three as a matched set.
 
 **The central design decision is preservation.** PodBox models a small subset
 of what Apple writes, and throwing away the rest would degrade a library a
@@ -202,7 +211,7 @@ Three abstractions worth knowing before you read any of it:
 - **`rebuildVisible()`** is the one funnel for filtering and sorting. It
   produces `visible_`, a vector of `(display position, track index)`. Anything
   that changes what should be on screen sets `visibleDirty_` and lets this
-  function do the work; nothing else filters or sorts. The display position is
+function do the work; nothing else filters or sorts. The display position is
   load-bearing — shift-click ranges and playlist drag-reorder both index
   through it.
 - **The column browser reads a set upstream of the one it constrains.**
@@ -212,6 +221,12 @@ Three abstractions worth knowing before you read any of it:
   of the predicate stage, so nothing reads what it writes. There is exactly one
   dirty flag for all of it, deliberately: a second cache would have to be
   invalidated at every one of `visibleDirty_`'s eighteen set-sites.
+
+On macOS, `macos_window.mm` registers Play, Pause, and Play/Pause with
+`MPRemoteCommandCenter` and publishes the current state through
+`MPNowPlayingInfoCenter`. MediaPlayer callbacks only enqueue commands and wake
+GLFW; `main.cpp` consumes them on the UI thread and calls the same `App`
+playback methods as the toolbar.
 
 ## `ui/`
 
@@ -252,17 +267,18 @@ revisions — **if you bump one, bump the other**: the versions in
 `CMakeLists.txt` and in `nix/podbox.nix` must stay in step or the two paths stop
 building the same program.
 
-Testing is thin and honest about it:
+The assertion-based tests are wired into CTest; run
+`ctest --test-dir build --output-on-failure` before committing. They cover
+deduplication/import metadata, UI helpers, hash58/hash72 cryptographic vectors,
+and modern Shuffle `iTunesSD` parsing/writing.
 
-- `dedupe_test` is the only tool with real assertions and a meaningful exit
-  code. It is wired into CTest — `ctest --test-dir build`. Run it before
-  committing.
+The remaining device-facing checks need local data:
+
 - `itdb_dump <in> <out>` is a round-trip regression check, but needs a real
   `iTunesDB`.
-- Everything else in `tools/` is a smoke tool that prints and returns 0, and
-  most need a mounted iPod or a live Apple Music library.
+- Most other tools need a mounted iPod or a live Apple Music library.
 - `testdata/` is gitignored, so fixtures are not shared. Point the tools at
   your own device.
 
-There is no CI, no `.clang-format`, and no code signing. All three are on the
-roadmap.
+GitHub Actions builds and runs CTest. There is no `.clang-format` or code
+signing; both remain on the roadmap.

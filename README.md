@@ -229,7 +229,12 @@ flake is macOS-only for that reason.
    under the device view (*Keep original*, *ALAC*, or *MP3*); FLAC is always
    converted so it plays on the iPod.
 4. **Play a song**: double-click it, or use the play/prev/next controls and
-   volume in the toolbar. Drag the scrubber to seek.
+   volume in the toolbar. Drag the scrubber to seek. The Mac keyboard's
+   Play/Pause key uses the same control: it pauses the current track, resumes
+   a paused track, or starts the selected track (the first visible track if
+   none is selected). PodBox registers with macOS's now-playing service, so
+   the key continues to work while its window is in the background; PodBox
+   must be running.
 5. **Remove music**: right-click a song → *Remove from iPod*.
 6. **Playlists**: click *+ New Playlist*, or right-click a song → *Add to
    Playlist*. Right-click a playlist to rename or delete it. Drag rows to
@@ -261,7 +266,9 @@ PodBox writes directly to your iPod's database, so it is careful:
   `iTunesDB.podbox-backup`. Restore any of them from the device pane
   (*Restore Database…*), which lists each backup with its date and song count;
   restoring rotates the current state in first, so the restore is itself
-  undoable.
+  undoable. On a 3G/4G Shuffle, `iTunesSD` and `iTunesStats` are rotated and
+  restored as the matching set, so the firmware index and play-count entries
+  cannot drift away from `iTunesDB`.
 - **Atomic writes.** Every database write goes to a temporary file and is then
   renamed into place, so an interrupted write cannot corrupt the library.
 - **Writes are refused** on iPods that need a checksum PodBox cannot produce
@@ -290,8 +297,10 @@ On the iPod, all under `iPod_Control/iTunes/`:
 |---|---|
 | `iTunesDB.podbox-bak.1` … `.5` | rolling backups |
 | `iTunesDB.podbox-backup` | the original iTunes-written database, kept once |
+| `iTunesSD.podbox-bak.1` … `.5` | matching Shuffle firmware-index backups |
+| `iTunesStats.podbox-bak.1` … `.5` | matching Shuffle play-stat backups |
 | `PodBoxFingerprints` | source fingerprints, so transcoded imports are recognised |
-| `iTunesDB.podbox-tmp` | transient; only present during a write |
+| `iTunesDB.podbox-tmp`, `iTunesSD.podbox-tmp`, `iTunesStats.podbox-tmp` | transient; only present during a write |
 
 Deleting any of these is safe; PodBox recreates what it needs.
 
@@ -311,6 +320,7 @@ The build also produces small utilities used for testing. With Nix they are in
 | `sync_test` | `<ipod-mount> [--remove]` — print the sync plan. Entirely read-only; needs a saved Mac library. |
 | `dedupe_test` | `[<music-dir> [verbose]]`, or `--fp <file>...` to print and compare fingerprints. The only tool with real assertions; exits non-zero on failure. |
 | `itunessd_test` | No arguments for regression tests, or `<iTunesDB> <existing-iTunesSD> <output>` to validate a proposed Shuffle database without touching the device. |
+| `shuffle_repair` | `<mount-point>` — transactionally rebuild a 3G/4G Shuffle's `iTunesSD` and `iTunesStats`, synthesize missing VoiceOver, and retain a matched backup of all three databases. This writes to the device. |
 
 The assertion-based tools are registered with CTest, so
 `ctest --test-dir build` runs them.
