@@ -2,22 +2,54 @@
 
 #include "library/dedupe.h"
 
+#include <algorithm>
 #include <unordered_set>
 
 namespace fs = std::filesystem;
 
 namespace podbox {
+namespace {
+
+fs::path deviceTrackPath(const fs::path& mount,
+                         const std::string& location) {
+    std::string relative = location;
+    std::replace(relative.begin(), relative.end(), ':', '/');
+    // Both iTunesDB spellings occur in the wild: colon locations generally
+    // start with ':' while SQLite-derived ones can start with '/'. In either
+    // case the path is rooted at the device mount, not the Mac filesystem.
+    while (!relative.empty() && relative.front() == '/')
+        relative.erase(relative.begin());
+    return mount / relative;
+}
+
+bool deviceFilePresent(const fs::path& mount, const Track& track) {
+    if (track.location.empty()) return false;
+    std::error_code ec;
+    return fs::is_regular_file(deviceTrackPath(mount, track.location), ec);
+}
+
+}  // namespace
 
 SyncPlan planSync(const HostLibrary& host, const Library& device,
                   const FingerprintStore& fingerprints,
+                  const fs::path& deviceMount,
                   const SyncOptions& options) {
     SyncPlan plan;
 
-    // What the device already holds, by both measures.
+    // What the device actually holds, by both measures. Finder/iTunes can
+    // remove audio while leaving a database entry behind; that entry must not
+    // suppress the replacement copy.
     std::unordered_set<std::string> deviceKeys;
     std::unordered_set<std::uint64_t> deviceHashes;
+    std::unordered_set<std::uint32_t> presentDeviceIds;
     deviceKeys.reserve(device.tracks.size());
+    presentDeviceIds.reserve(device.tracks.size());
     for (const Track& t : device.tracks) {
+        if (!deviceFilePresent(deviceMount, t)) {
+            plan.missingDeviceFiles.push_back(t.id);
+            continue;
+        }
+        presentDeviceIds.insert(t.id);
         const std::string key = duplicateKey(t, MatchMode::Exact);
         if (!key.empty()) deviceKeys.insert(key);
         if (const AudioFingerprint* fp = fingerprints.get(t.dbid))
@@ -77,6 +109,10 @@ SyncPlan planSync(const HostLibrary& host, const Library& device,
             if (h.fp.ok()) hostHashes.insert(h.fp.hash);
         }
         for (const Track& t : device.tracks) {
+            // Missing audio is handled unconditionally by
+            // missingDeviceFiles. It cannot be a device-only copy and has no
+            // bytes to free.
+            if (!presentDeviceIds.count(t.id)) continue;
             const AudioFingerprint* fp = fingerprints.get(t.dbid);
             const bool known = (fp && fp->ok() && hostHashes.count(fp->hash)) ||
                                matchesAny(t, hostExact, MatchMode::Exact) ||

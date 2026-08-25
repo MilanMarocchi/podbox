@@ -563,17 +563,24 @@ void App::refreshSyncPlan() {
     syncUi_.dirty = false;
     syncUi_.plan = {};
     if (!library_) return;
-    syncUi_.plan = planSync(host_, *library_, fingerprints_, syncUi_.options);
+    syncUi_.plan = planSync(host_, *library_, fingerprints_, loadedMount_,
+                            syncUi_.options);
 }
 
 void App::startSync() {
-    if (!library_ || syncUi_.plan.toCopy.empty()) return;
+    if (!library_ || syncUi_.plan.empty()) return;
 
-    // Removals first, so space is freed before anything is copied in.
-    if (!syncUi_.plan.toRemove.empty()) {
-        const int removed = performDeleteMany(syncUi_.plan.toRemove);
+    // Remove dead database entries first. Besides cleaning up songs that can
+    // no longer play, this keeps the import duplicate guard below from seeing
+    // a missing file as an existing copy. User-requested removals join the
+    // same transaction so the database is only rewritten once.
+    std::vector<std::uint32_t> removeIds = syncUi_.plan.missingDeviceFiles;
+    removeIds.insert(removeIds.end(), syncUi_.plan.toRemove.begin(),
+                     syncUi_.plan.toRemove.end());
+    if (!removeIds.empty()) {
+        const int removed = performDeleteMany(removeIds);
         setStatus("Removed " + plural(removed, "song", "songs") +
-                  " not in your library");
+                  " with missing or unwanted files");
     }
 
     // Copying reuses the drag-and-drop pipeline: same worker, same transcode,
@@ -630,6 +637,13 @@ void App::drawSyncModal() {
                "missing from your Mac",
                syncUi_.plan.alreadyOnDevice, syncUi_.plan.skippedDuplicate,
                syncUi_.plan.skippedMissing);
+    if (!syncUi_.plan.missingDeviceFiles.empty())
+        aqua::body(fonts_,
+                   "%s missing from the iPod. PodBox will restore any copy "
+                   "available in your Mac library.",
+                   plural(int(syncUi_.plan.missingDeviceFiles.size()),
+                          "song file is", "song files are")
+                       .c_str());
     aqua::body(fonts_,
                "FLAC and other lossless files are converted to 16-bit Apple "
                "Lossless so the iPod can play them.");

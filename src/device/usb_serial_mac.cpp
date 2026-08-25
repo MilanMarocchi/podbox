@@ -35,11 +35,13 @@ std::string usbSerialForMount(const fs::path& mountPoint) {
     const std::string bsdName = bsdNameForMount(mountPoint);
     if (bsdName.empty()) return {};
 
-    CFMutableDictionaryRef match = IOBSDNameMatching(kIOMainPortDefault, 0,
+    // MACH_PORT_NULL requests IOKit's default port on every supported macOS
+    // release. kIOMainPortDefault is only exported from macOS 12 onward.
+    CFMutableDictionaryRef match = IOBSDNameMatching(MACH_PORT_NULL, 0,
                                                      bsdName.c_str());
     if (!match) return {};
     // Consumes `match`.
-    io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault, match);
+    io_service_t service = IOServiceGetMatchingService(MACH_PORT_NULL, match);
     if (!service) return {};
 
     // The partition knows nothing about USB; the serial lives on the USB

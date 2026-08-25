@@ -1,4 +1,14 @@
 cmake_minimum_required(VERSION 3.24)
+
+# CMake must know the deployment target before it enables a compiler in
+# project(). Otherwise the generated Mach-O binary silently targets the macOS
+# version of the build machine even though Info.plist advertises macOS 11.
+# Also repair an empty value left in an existing cache by older revisions.
+if(CMAKE_HOST_APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING
+      "Minimum macOS version" FORCE)
+endif()
+
 project(PodBox VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -11,16 +21,23 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 if(APPLE)
-  # The Info.plist has claimed macOS 11 since the bundle existed; this is what
-  # makes the compiler agree, rather than silently emitting calls that are
-  # unavailable there.
-  set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
-
   # Off by default because it doubles build time and every dependency has to
   # be built twice too. Turn it on for a release: -DPODBOX_UNIVERSAL=ON
   option(PODBOX_UNIVERSAL "Build a universal arm64 + x86_64 binary" OFF)
   if(PODBOX_UNIVERSAL)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
+
+    # Prefer the libraries shipped by macOS over a developer's
+    # single-architecture Homebrew/MacPorts copies. This override is specific
+    # to local universal releases; Nix supplies its own pinned zlib and SQLite.
+    set(ZLIB_LIBRARY "${CMAKE_OSX_SYSROOT}/usr/lib/libz.tbd" CACHE FILEPATH
+        "macOS system zlib" FORCE)
+    set(ZLIB_LIBRARY_RELEASE "${ZLIB_LIBRARY}" CACHE FILEPATH
+        "macOS system zlib" FORCE)
+    set(ZLIB_INCLUDE_DIR "${CMAKE_OSX_SYSROOT}/usr/include" CACHE PATH
+        "macOS system headers" FORCE)
+    set(SQLite3_LIBRARY "${CMAKE_OSX_SYSROOT}/usr/lib/libsqlite3.tbd"
+        CACHE FILEPATH "macOS system SQLite" FORCE)
   endif()
 endif()
 
@@ -310,6 +327,7 @@ endif()
 # into CTest. Run with: ctest --test-dir build
 enable_testing()
 add_test(NAME dedupe COMMAND dedupe_test)
+add_test(NAME sync COMMAND sync_test --self-test)
 add_test(NAME ui COMMAND ui_test)
 add_test(NAME hash58 COMMAND hash58_test)
 add_test(NAME hash72 COMMAND hash72_test)
