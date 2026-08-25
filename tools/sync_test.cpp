@@ -16,6 +16,7 @@
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 using namespace podbox;
@@ -88,6 +89,24 @@ int selfTest() {
           "a present device file is not queued for cleanup");
     check(plan.alreadyOnDevice == 1,
           "a present matching song is counted as already on the device");
+
+    std::printf("managed removal boundary\n");
+    Track other = track(8);
+    other.artist = "Someone Else";
+    other.title = "Device Only";
+    other.location = ":iPod_Control:Music:F00:BBBB.mp3";
+    device.tracks.push_back(other);
+    std::ofstream(mount / "iPod_Control" / "Music" / "F00" / "BBBB.mp3")
+        << "other device audio";
+    options.removeFromDevice = true;
+    std::unordered_set<std::uint32_t> managed = {7};
+    plan = planSync(host, device, fingerprints, mount, options, &managed);
+    check(plan.toRemove.empty(),
+          "mirror sync leaves an unmanaged device-only file alone");
+    managed.insert(8);
+    plan = planSync(host, device, fingerprints, mount, options, &managed);
+    check(plan.toRemove.size() == 1 && plan.toRemove[0] == 8,
+          "mirror sync may remove a managed device-only file");
 
     fs::remove_all(mount, ec);
     if (failures == 0) std::printf("all sync tests passed\n");

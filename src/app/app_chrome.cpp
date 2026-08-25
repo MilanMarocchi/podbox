@@ -340,7 +340,7 @@ void App::drawToolbar() {
         if (!syncing && playingTrackId_ != 0) {
             drawNowPlaying(a, b);
         } else {
-            const auto& dev = watcher_.device();
+            const DeviceInfo* dev = activeDevice();
             std::string line1 = dev ? dev->volumeName : "PodBox";
             std::string line2;
             if (syncing) {
@@ -354,7 +354,7 @@ void App::drawToolbar() {
             } else if (dev) {
                 line2 = formatBytes(dev->freeBytes) + " available";
             } else {
-                line2 = "No iPod connected";
+                line2 = "No music player connected";
             }
             // "Copying <name>" carries a filename, so it needs fitting for
             // exactly the same reason the now-playing lines do.
@@ -542,49 +542,60 @@ void App::drawSidebar(float height) {
     }
 
     sectionHeader("DEVICES");
-    const auto& dev = watcher_.device();
-    if (dev) {
+    const auto& devices = watcher_.devices();
+    for (int d = 0; d < int(devices.size()); ++d) {
+        const DeviceInfo& dev = devices[d];
+        const bool active = dev.mountPoint == loadedMount_;
+        ImGui::PushID(d);
         const ImVec2 iconPos = ImGui::GetCursorScreenPos();
-        if (row("device", dev->volumeName, 28.0f, view_ == View::Device))
-            switchSource(View::Device);
+        if (row("device", dev.volumeName, 28.0f,
+                active && view_ == View::Device))
+            activateDevice(dev.mountPoint);
         const ImVec2 afterRow = ImGui::GetCursorScreenPos();
-        // Eject button overlapping the right side of the device row.
-        const bool devSelected = view_ == View::Device;
         ImGui::SetCursorScreenPos(
             ImVec2(iconPos.x + kSidebarWidth - 32.0f, iconPos.y));
+        ImGui::BeginDisabled(active && sync_.busy());
         if (ImGui::InvisibleButton("##eject", ImVec2(26.0f, 18.0f)))
-            ejectRequested_ = true;
+            ejectRequestedMount_ = dev.mountPoint;
+        ImGui::EndDisabled();
         const ImVec2 em = ImGui::GetItemRectMin();
         const float ejx = em.x + 8.0f, ejy = em.y + 4.0f;
         const ImU32 ejCol = ImGui::IsItemHovered()
                                 ? pal::GlyphOn
-                                : (devSelected ? IM_COL32_WHITE
-                                               : pal::Glyph);
+                                : (active && view_ == View::Device
+                                       ? IM_COL32_WHITE
+                                       : pal::Glyph);
         drawEjectGlyph(dl, ImVec2(ejx + 5.0f, ejy + 5.0f), ejCol);
         ImGui::SetCursorScreenPos(afterRow);
         drawIpodIcon(dl, ImVec2(iconPos.x + 10, iconPos.y + 1));
-        if (library_) {
-            if (row("music", "Music", 28.0f, view_ == View::Music)) {
+        if (active && library_) {
+            if (row("music", "Music", 38.0f, view_ == View::Music))
                 switchSource(View::Music);
-            }
             // Only offered when the device actually holds some: an empty
             // Podcasts row is a dead end, and most iPods have none.
             if (devHasPodcasts_ &&
-                row("podcasts", "Podcasts", 28.0f, view_ == View::Podcasts))
+                row("podcasts", "Podcasts", 38.0f, view_ == View::Podcasts))
                 switchSource(View::Podcasts);
             if (devHasAudiobooks_ &&
-                row("books", "Audiobooks", 28.0f, view_ == View::Audiobooks))
+                row("books", "Audiobooks", 38.0f, view_ == View::Audiobooks))
                 switchSource(View::Audiobooks);
         }
-    } else {
+        ImGui::PopID();
+    }
+    if (devices.empty()) {
         ImGui::SetCursorPosX(10);
         ImGui::PushFont(fonts_.label);
-        ImGui::TextColored(v4(pal::TextDim), "No iPod connected");
+        ImGui::TextColored(v4(pal::TextDim), "No music player connected");
         ImGui::PopFont();
     }
 
     if (library_) {
-        sectionHeader("PLAYLISTS");
+        const DeviceInfo* dev = activeDevice();
+        const std::string playlistHeader = truncateToWidth(
+            fonts_.labelBold, fonts_.labelSize,
+            dev ? "PLAYLISTS — " + dev->volumeName : "PLAYLISTS",
+            kSidebarWidth - 20.0f);
+        sectionHeader(playlistHeader.c_str());
         for (int i = 0; i < int(library_->playlists.size()); ++i) {
             const bool selected =
                 view_ == View::Playlist && playlistIndex_ == i;
@@ -653,7 +664,7 @@ void App::drawSidebar(float height) {
 
 void App::drawMainPanel(float height) {
     const float width = ImGui::GetWindowWidth() - kSidebarWidth;
-    const auto& dev = watcher_.device();
+    const DeviceInfo* dev = activeDevice();
     const bool trackView = showingTracks();
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
@@ -673,7 +684,8 @@ void App::drawMainPanel(float height) {
             ImVec2((avail.x - ts.x) * 0.5f, (avail.y - ts.y) * 0.5f));
         ImGui::TextDisabled("%s", msg);
     } else if (!dev && view_ != View::Library) {
-        const char* msg = "Connect an iPod, or pick Music under Library";
+        const char* msg =
+            "Connect a music player, or pick Music under Library";
         const ImVec2 avail = ImGui::GetWindowSize();
         const ImVec2 ts = ImGui::CalcTextSize(msg);
         ImGui::SetCursorPos(
@@ -834,7 +846,7 @@ void App::drawColumnBrowser(float width) {
                 pal::BrowserBorder);
 }
 
-void App::drawDeviceView(const IpodInfo& dev) {
+void App::drawDeviceView(const DeviceInfo& dev) {
     ImGui::PushFont(fonts_.uiBold);
     ImGui::TextUnformatted(dev.volumeName.c_str());
     ImGui::PopFont();
@@ -856,7 +868,9 @@ void App::drawDeviceView(const IpodInfo& dev) {
         std::string dbInfo;
         if (library_) {
             dbInfo = std::to_string(library_->tracks.size()) + " songs";
-            switch (library_->hashingScheme) {
+            if (!dev.isIpod()) {
+                dbInfo += " — indexed from " + dev.musicDirectory.string();
+            } else switch (library_->hashingScheme) {
                 case kChecksumNone:
                     dbInfo += " — writable, no hash required";
                     break;
@@ -883,7 +897,7 @@ void App::drawDeviceView(const IpodInfo& dev) {
         } else {
             dbInfo = libraryError_;
         }
-        row("Database", dbInfo);
+        row(dev.isIpod() ? "Database" : "Library", dbInfo);
         ImGui::EndTable();
     }
 
@@ -911,9 +925,16 @@ void App::drawDeviceView(const IpodInfo& dev) {
     importFormat_ = ImportFormat(fmt);
 
     ImGui::PushFont(fonts_.label);
-    ImGui::TextColored(v4(pal::TextDim),
-                       "Drag songs onto the window to add them. FLAC is always "
-                       "converted so it plays on the iPod.");
+    if (dev.isIpod())
+        ImGui::TextColored(
+            v4(pal::TextDim),
+            "Drag songs onto the window to add them. FLAC is always "
+            "converted so it plays on the iPod.");
+    else
+        ImGui::TextColored(
+            v4(pal::TextDim),
+            "Supported formats are copied unchanged into readable "
+            "Artist/Album folders. This profile keeps FLAC original.");
     ImGui::PopFont();
 
     ImGui::Dummy(ImVec2(0, 14));
@@ -923,7 +944,8 @@ void App::drawDeviceView(const IpodInfo& dev) {
     ImGui::Dummy(ImVec2(0, 2));
     ImGui::BeginDisabled(host_.tracks().empty() || sync_.busy() ||
                          !writesSupported());
-    if (ImGui::Button("Sync Library to iPod…")) {
+    if (ImGui::Button(dev.isIpod() ? "Sync Library to iPod…"
+                                   : "Sync Library to Player…")) {
         syncUi_.open = true;
         syncUi_.dirty = true;
         syncUi_.confirmRemove = false;
@@ -941,7 +963,9 @@ void App::drawDeviceView(const IpodInfo& dev) {
     ImGui::TextUnformatted("Duplicates");
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(0, 2));
-    ImGui::Checkbox("Skip songs already on this iPod", &skipDuplicates_);
+    ImGui::Checkbox(dev.isIpod() ? "Skip songs already on this iPod"
+                                 : "Skip songs already on this player",
+                    &skipDuplicates_);
 
     // Finding duplicates is harmless, but the sheet's only action is to remove
     // them, so there is nothing to offer on a device we cannot write to.
@@ -965,16 +989,23 @@ void App::drawDeviceView(const IpodInfo& dev) {
     ImGui::TextUnformatted("Safety");
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(0, 2));
-    ImGui::BeginDisabled(!writesSupported());
-    if (ImGui::Button("Restore Database…")) restoreOpen_ = true;
-    ImGui::EndDisabled();
     ImGui::PushFont(fonts_.label);
-    if (itunesSdKind_ == ItunesSdKind::Legacy)
+    if (!dev.isIpod()) {
+        ImGui::TextColored(
+            v4(pal::TextDim),
+            "Mirror sync only removes files previously copied by PodBox. "
+            "Other files on this player are left alone.");
+    } else {
+        ImGui::BeginDisabled(!writesSupported());
+        if (ImGui::Button("Restore Database…")) restoreOpen_ = true;
+        ImGui::EndDisabled();
+    }
+    if (dev.isIpod() && itunesSdKind_ == ItunesSdKind::Legacy)
         ImGui::TextColored(v4(pal::Warning),
                            "This older iPod shuffle uses a different iTunesSD "
                            "format, so it is read-only here. Nothing on the "
                            "device will be changed.");
-    else if (!writesSupported() && library_ &&
+    else if (dev.isIpod() && !writesSupported() && library_ &&
         (library_->hashingScheme == kChecksumHash58 ||
          library_->hashingScheme == kChecksumHash72 ||
          library_->hashingScheme == kChecksumHashAB))
@@ -982,16 +1013,16 @@ void App::drawDeviceView(const IpodInfo& dev) {
                            "PodBox could not reproduce this iPod's complete "
                            "database set, so it stays read-only. Nothing "
                            "will be changed.");
-    else if (!writesSupported())
+    else if (dev.isIpod() && !writesSupported())
         ImGui::TextColored(v4(pal::Warning),
                            "This iPod's database carries a checksum PodBox "
                            "cannot produce yet, so it is read-only here. "
                            "Nothing on the device will be changed.");
-    else if (appleMusicSyncing())
+    else if (dev.isIpod() && appleMusicSyncing())
         ImGui::TextColored(v4(pal::Warning),
                            "Apple Music is syncing this iPod right now — "
                            "PodBox will not write until it finishes.");
-    else
+    else if (dev.isIpod())
         ImGui::TextColored(v4(pal::TextDim),
                            "PodBox saves the database before every change and "
                            "keeps the last five.");
@@ -1116,24 +1147,23 @@ void App::drawTrackTable() {
                 ImGuiSelectableFlags_SpanAllColumns |
                     ImGuiSelectableFlags_AllowDoubleClick |
                     ImGuiSelectableFlags_AllowOverlap);
-            if (clicked) {
+            // Selectable reports its click on release. A drag has already
+            // built the intended range by then, so do not collapse it back
+            // to the row where the drag began.
+            if (clicked && !dragSelectMoved_) {
                 const ImGuiIO& io = ImGui::GetIO();
                 selectRow(r, t.id, io.KeyShift, io.KeySuper || io.KeyCtrl);
             }
-            if (viewingHost() && ImGui::IsItemActivated() &&
+            if (!reorderable && ImGui::IsItemActivated() &&
                 ImGui::IsMouseDown(ImGuiMouseButton_Left))
                 dragSelectAnchorRow_ = r;
-            if (viewingHost() && dragSelectAnchorRow_ >= 0 &&
+            if (!reorderable && dragSelectAnchorRow_ >= 0 &&
                 ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
                 ImGui::IsItemHovered(
                     ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
-                const int lo = std::min(dragSelectAnchorRow_, r);
-                const int hi = std::max(dragSelectAnchorRow_, r);
-                selection_.clear();
-                for (int row = lo;
-                     row <= hi && row < int(visible_.size()); ++row)
-                    selection_.push_back(
-                        shown->tracks[visible_[row].second].id);
+                dragSelectMoved_ = true;
+                selection_ = displayedTrackRange(
+                    *shown, visible_, dragSelectAnchorRow_, r);
                 selectionAnchor_ =
                     shown->tracks[visible_[dragSelectAnchorRow_].second].id;
                 selectedTrackId_ = t.id;
@@ -1187,7 +1217,11 @@ void App::drawTrackTable() {
                 // Ratings on the Mac library go to library.tsv; on the iPod
                 // they are a database write, so on a device we cannot write
                 // the stars still render but do not respond.
-                const bool rateable = viewingHost() || writesSupported();
+                const DeviceInfo* device = activeDevice();
+                const bool rateable =
+                    viewingHost() ||
+                    (device && device->capabilities.ratings &&
+                     writesSupported());
                 ImGui::BeginDisabled(!rateable);
                 ImGui::InvisibleButton("##rate", ImVec2(70, 16));
                 ImGui::EndDisabled();
@@ -1205,8 +1239,10 @@ void App::drawTrackTable() {
     }
     ImGui::PopStyleColor(2);
     ImGui::EndTable();
-    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         dragSelectAnchorRow_ = -1;
+        dragSelectMoved_ = false;
+    }
 
     if (newRatingId && newRating >= 0) setTrackRating(newRatingId, newRating);
 
@@ -1226,51 +1262,60 @@ void App::drawTrackTable() {
     handleTrackTableKeys();
 }
 
-// Cmd+I and Delete for the track table. Kept apart from the drawing
+// Cmd+A, Cmd+I and Delete for the track table. Kept apart from the drawing
 // because it is the one part of it that is not drawing.
 void App::handleTrackTableKeys() {
-if (!selection_.empty() && !ImGui::GetIO().WantTextInput &&
-    (ImGui::GetIO().KeySuper || ImGui::GetIO().KeyCtrl) &&
-    ImGui::IsKeyPressed(ImGuiKey_I))
-    openGetInfo();
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool command = io.KeySuper || io.KeyCtrl;
+    if (!io.WantTextInput && command && ImGui::IsKeyPressed(ImGuiKey_A)) {
+        if (const Library* shown = shownLibrary(); shown && !visible_.empty()) {
+            selection_ = displayedTrackRange(
+                *shown, visible_, 0, int(visible_.size()) - 1);
+            selectionAnchor_ = selection_.front();
+            selectedTrackId_ = selection_.back();
+        }
+    }
 
-if (selectedTrackId_ && !deleteRequestId_ &&
-    !ImGui::GetIO().WantTextInput &&
-    (ImGui::IsKeyPressed(ImGuiKey_Delete) ||
-     ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
-    // In a playlist, plain Delete removes from the playlist; the
-    // "Remove from iPod" path stays in the context menu to avoid
-    // accidental file deletion.
-    if (!viewingHost() && !writesSupported()) {
-        setStatus(writeBlockReason());
-    } else if (view_ == View::Playlist && playlistIndex_ >= 0) {
-        auto& ids = library_->playlists[playlistIndex_].trackIds;
-        int removed = 0;
-        for (std::uint32_t id : selection_) {
-            if (auto it = std::find(ids.begin(), ids.end(), id);
-                it != ids.end()) {
-                ids.erase(it);
-                ++removed;
+    if (!selection_.empty() && !io.WantTextInput && command &&
+        ImGui::IsKeyPressed(ImGuiKey_I))
+        openGetInfo();
+
+    if (selectedTrackId_ && !deleteRequestId_ && !io.WantTextInput &&
+        (ImGui::IsKeyPressed(ImGuiKey_Delete) ||
+         ImGui::IsKeyPressed(ImGuiKey_Backspace))) {
+        // In a playlist, plain Delete removes from the playlist; the
+        // "Remove from Player" path stays in the context menu to avoid
+        // accidental file deletion.
+        if (!viewingHost() && !writesSupported()) {
+            setStatus(writeBlockReason());
+        } else if (view_ == View::Playlist && playlistIndex_ >= 0) {
+            auto& ids = library_->playlists[playlistIndex_].trackIds;
+            int removed = 0;
+            for (std::uint32_t id : selection_) {
+                if (auto it = std::find(ids.begin(), ids.end(), id);
+                    it != ids.end()) {
+                    ids.erase(it);
+                    ++removed;
+                }
             }
+            if (removed > 0) {
+                visibleDirty_ = true;
+                if (writeDatabase())
+                    setStatus("Removed " + plural(removed, "song", "songs") +
+                              " from the playlist");
+            }
+        } else if (viewingHost()) {
+            // Deleting from the Mac library would mean deleting the user's
+            // own files out of a folder PodBox only indexes. Not this key's
+            // job, and not something to do by accident.
+            setStatus("Delete removes songs from the player, not from your Mac");
+        } else {
+            deleteRequestId_ = selectedTrackId_;
         }
-        if (removed > 0) {
-            visibleDirty_ = true;
-            if (writeDatabase())
-                setStatus("Removed " + plural(removed, "song", "songs") +
-                          " from the playlist");
-        }
-    } else if (viewingHost()) {
-        // Deleting from the Mac library would mean deleting the user's
-        // own files out of a folder PodBox only indexes. Not this key's
-        // job, and not something to do by accident.
-        setStatus("Delete removes songs from the iPod, not from your Mac");
-    } else {
-        deleteRequestId_ = selectedTrackId_;
     }
 }
-}
 
-void App::drawCapacityBar(const IpodInfo& dev) {
+void App::drawCapacityBar(const DeviceInfo& dev) {
     const float w = ImGui::GetContentRegionAvail().x;
     const float h = 14.0f;
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -1418,12 +1463,14 @@ void App::drawStatusBar() {
 
     // Eject, at the right end, only when there is something to eject.
     float rightEdge = w - 8.0f;
-    const auto& dev = watcher_.device();
+    const DeviceInfo* dev = activeDevice();
     if (dev) {
         rightEdge -= 16.0f;
         ImGui::SetCursorPos(ImVec2(rightEdge, statusTop + 4.0f));
+        ImGui::BeginDisabled(sync_.busy());
         if (ImGui::InvisibleButton("##ejectstatus", ImVec2(16, 16)))
-            ejectRequested_ = true;
+            ejectRequestedMount_ = dev->mountPoint;
+        ImGui::EndDisabled();
         const ImU32 c = ImGui::IsItemHovered() ? pal::GlyphHot : pal::Glyph;
         const float gx = wp.x + rightEdge + 8.0f;
         drawEjectGlyph(dl, ImVec2(gx, iy), c);
@@ -1452,7 +1499,7 @@ void App::drawStatusBar() {
         text = formatBytes(dev->capacityBytes) + " capacity, " +
                formatBytes(dev->freeBytes) + " available";
     } else {
-        text = "No iPod connected";
+        text = "No music player connected";
     }
     addTextCenteredFit(dl, fonts_.label, fonts_.labelSize, wp.x + leftEdge,
                        wp.x + rightEdge, iy, pal::StatusText, text);

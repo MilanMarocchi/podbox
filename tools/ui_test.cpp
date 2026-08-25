@@ -101,6 +101,25 @@ void testTruncate(ImFont* font, float size) {
     }
 }
 
+void testDisplayedTrackRange() {
+    std::printf("displayedTrackRange\n");
+    podbox::Library library;
+    for (std::uint32_t id : {10u, 20u, 30u}) {
+        podbox::Track track;
+        track.id = id;
+        library.tracks.push_back(track);
+    }
+    // The table is sorted 30, 10, 20 rather than library order.
+    const std::vector<std::pair<int, int>> visible = {
+        {2, 2}, {0, 0}, {1, 1}};
+    check(podbox::displayedTrackRange(library, visible, 0, 1) ==
+              std::vector<std::uint32_t>({30, 10}),
+          "a forward drag follows displayed order");
+    check(podbox::displayedTrackRange(library, visible, 2, 1) ==
+              std::vector<std::uint32_t>({10, 20}),
+          "a reverse drag selects the same inclusive range");
+}
+
 }  // namespace
 
 int main() {
@@ -116,6 +135,7 @@ int main() {
 
     ImFont* font = io.Fonts->Fonts[0];
     testTruncate(font, 13.0f);
+    testDisplayedTrackRange();
 
     ImGui::DestroyContext();
     std::printf("\n%s\n", failures ? "FAILED" : "OK");

@@ -1,5 +1,6 @@
 #include "sync/sync_engine.h"
 
+#include "device/filesystem_player.h"
 #include "library/dedupe.h"
 #include "library/metadata.h"
 #include "library/transcode.h"
@@ -60,12 +61,12 @@ SyncEngine::~SyncEngine() {
 }
 
 void SyncEngine::queueAdds(const std::vector<fs::path>& files,
-                           const fs::path& mount, ImportFormat fmt,
+                           ImportTarget target, ImportFormat fmt,
                            DupeGuard guard) {
     if (files.empty()) return;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        mount_ = mount;
+        target_ = std::move(target);
         importFmt_ = fmt;
         guard_ = std::move(guard);
         for (const auto& f : files) pending_.push_back(f);
@@ -123,7 +124,8 @@ void SyncEngine::noteImported(const Track& track, const AudioFingerprint& fp) {
 
 void SyncEngine::run() {
     for (;;) {
-        fs::path src, mount;
+        fs::path src;
+        ImportTarget target;
         ImportFormat fmt = ImportFormat::Original;
         {
             std::unique_lock<std::mutex> lock(mutex_);
@@ -131,7 +133,7 @@ void SyncEngine::run() {
             if (stop_) return;
             src = pending_.front();
             pending_.pop_front();
-            mount = mount_;
+            target = target_;
             fmt = importFmt_;
             current_ = src.filename().string();
             working_.store(true);
@@ -147,14 +149,24 @@ void SyncEngine::run() {
             // writing a second file and letting the UI clean it up later.
             result.duplicate = true;
         } else {
-            const std::string ext = importExtension(fmt, src);
+            const bool originalSupported =
+                target.originalExtensions.count(
+                    toLower(src.extension().string())) > 0;
+            const std::string ext =
+                importExtension(fmt, src, originalSupported);
             std::string location;
-            const fs::path dest = allocateMusicPath(mount, ext, &location);
+            const fs::path dest =
+                target.layout == DeviceMusicLayout::IpodFolders
+                    ? allocateMusicPath(target.mount, ext, &location)
+                    : allocateFilesystemMusicPath(
+                          target.mount, target.musicDirectory, meta.track, ext,
+                          &location);
             std::error_code ec;
             std::string convErr;
             if (dest.empty()) {
                 result.error = result.name + ": could not allocate a filename";
-            } else if (!importAudio(fmt, src, dest, &convErr)) {
+            } else if (!importAudio(fmt, src, dest, &convErr,
+                                    originalSupported)) {
                 result.error = convErr;
                 fs::remove(dest, ec);  // clean up any partial output
             } else {

@@ -13,8 +13,8 @@ namespace podbox {
 // Remembers what each track on a device was made from.
 //
 // The iTunesDB has nowhere safe to record this, so it lives in a sidecar next
-// to it and travels with the iPod. Keyed by Track::dbid, the only per-track
-// identifier the DB persists across sessions.
+// to it. Folder-based players keep the equivalent under .podbox. Keyed by
+// Track::dbid, which is persistent across sessions for both backends.
 //
 // The point is transcoding. When a FLAC is imported as ALAC, the file on the
 // device can never byte-match the source, so the source's fingerprint is

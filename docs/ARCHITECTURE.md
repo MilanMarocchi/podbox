@@ -16,7 +16,7 @@ src/
   app/            all UI and all mutation logic (app.cpp is the big one)
   ui/             theme, Aqua drawing, and native macOS window/media commands
   itdb/           iTunesDB/iTunesSD readers and writers, and play-count merges
-  device/         mount detection, the model table, eject
+  device/         player discovery, filesystem-player backend, iPod model table, eject
   library/        everything about audio files and the Mac-side collection
   sync/           diffing the two libraries and copying between them
   audio/          playback (AVFoundation on macOS, a no-op stub elsewhere)
@@ -163,6 +163,34 @@ because that is what everything written before PodBox recorded it looks like.
 | `applemusic.cpp` | read Music.app via AppleScript, copy files out |
 | `dedupe.cpp` | grouping and keeper ranking |
 
+### `device/` — player backends
+
+`DeviceInfo` is the common description consumed by the UI and sync worker. It
+identifies the backend kind, mount and music root, format profile, capacity and
+capabilities such as playlists, ratings, play counts and database backups.
+Discovery returns every matching mounted volume. The app keeps one active
+device library at a time and reloads it transactionally when its sidebar row is
+selected; because mutations are committed immediately, switching devices never
+shares playlist or fingerprint state. A copy chosen from the Mac library first
+activates its explicit destination, and device switching is locked while that
+copy worker owns the target.
+
+The iPod backend remains database-backed. `filesystem_player.cpp` handles
+players whose firmware indexes ordinary tagged files below `MUSIC`: it scans
+with the shared metadata reader, uses stable IDs derived from relative paths,
+reads M3U/M3U8 playlists, and writes edited playlists transactionally. Its
+`.podbox/filesystem-player.tsv` manifest is an authority boundary rather than
+a second media database — only paths recorded there may be removed by mirror
+sync. Pre-existing files remain visible and explicitly editable but are never
+silently claimed.
+
+The sync worker receives an `ImportTarget` value instead of reaching into a
+live backend. iPods allocate random `F##/ABCD` destinations; filesystem players
+allocate sanitized `Artist/Album/track - title` paths. Supported extensions
+also come from that value, which is why Sony keeps FLAC while classic iPods
+still convert it. This value boundary is the seam for a future MTP transport:
+MTP object identifiers must not be represented as `std::filesystem::path`.
+
 **Fingerprints** hash three windows of the audio stream plus its length,
 skipping ID3 tags, FLAC metadata blocks and the MP4 `moov` atom. Cost is
 constant regardless of file size. Retagging does not change the result;
@@ -203,11 +231,12 @@ This is why there are no locks around the library, and why a cold scan of a
 large folder does not stall the frame loop. If you add background work, follow
 the same shape: copy in, results out, no shared mutable state.
 
-`App::writeDatabase()` is the single funnel for every database write. All
-thirteen mutation sites go through it, and the guards live there: the hashing
-scheme, the Apple Music mid-sync interlock, backup rotation, the atomic
-temp-and-rename, and keeping the fingerprint sidecar in step. Add a mutation
-and you get all of that for free — do not write the database any other way.
+`App::writeDatabase()` is the historical name of the single commit funnel for
+every device-library mutation. For iPods its guards cover the hashing scheme,
+Apple Music mid-sync interlock, backup rotation and atomic database install.
+For filesystem players it commits changed M3U8 files and the managed-file
+manifest. Both paths keep the fingerprint sidecar in step. Add a mutation and
+you get all of that for free — do not commit device state any other way.
 
 ## `app/`
 
@@ -269,8 +298,8 @@ pair that makes every modal look like a Mac OS X sheet.
 
 ## On-disk formats PodBox owns
 
-Both are line-oriented text with a magic first line, chosen so they can be
-inspected and repaired by hand.
+These are line-oriented text formats chosen so they can be inspected and
+repaired by hand. The first two have a magic first line.
 
 - `library.tsv` — `podbox-library 1`, then one `W` row per watch folder and one
   `T` row per track, tab-separated with escaping. Written atomically via
@@ -281,6 +310,11 @@ inspected and repaired by hand.
   is what makes an older file load rather than silently count as zero tracks.
 - `PodBoxFingerprints` — `podbox-fingerprints 1`, keyed by `Track::dbid`. Lives
   on the device so it travels with it.
+- `.podbox/filesystem-player.tsv` — managed audio paths plus persistent
+  playlist IDs and locations for a mounted folder-based player. It never
+  claims an audio file merely because it was found below `MUSIC`.
+- `.podbox/fingerprints` — source fingerprints for filesystem-player imports;
+  the iPod equivalent remains `iPod_Control/iTunes/PodBoxFingerprints`.
 
 ## Building and testing
 

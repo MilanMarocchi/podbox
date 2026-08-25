@@ -87,6 +87,11 @@ bool mp3EncoderAvailable() {
 }
 
 std::string importExtension(ImportFormat fmt, const fs::path& src) {
+    return importExtension(fmt, src, isSupportedAudioFile(src));
+}
+
+std::string importExtension(ImportFormat fmt, const fs::path& src,
+                            bool originalSupported) {
     switch (fmt) {
         case ImportFormat::Alac:
             return ".m4a";
@@ -96,13 +101,17 @@ std::string importExtension(ImportFormat fmt, const fs::path& src) {
         default:
             // Playable formats keep their extension; anything else (FLAC) is
             // converted to Apple Lossless so it plays on the iPod.
-            return isSupportedAudioFile(src) ? src.extension().string()
-                                             : ".m4a";
+            return originalSupported ? src.extension().string() : ".m4a";
     }
 }
 
 bool importAudio(ImportFormat fmt, const fs::path& src, const fs::path& dest,
                  std::string* error) {
+    return importAudio(fmt, src, dest, error, isSupportedAudioFile(src));
+}
+
+bool importAudio(ImportFormat fmt, const fs::path& src, const fs::path& dest,
+                 std::string* error, bool originalSupported) {
     std::error_code ec;
     bool ok = false;
     switch (fmt) {
@@ -117,7 +126,7 @@ bool importAudio(ImportFormat fmt, const fs::path& src, const fs::path& dest,
             break;
         case ImportFormat::Original:
         default:
-            if (isSupportedAudioFile(src))
+            if (originalSupported)
                 ok = fs::copy_file(src, dest, ec) && !ec;
             else
                 ok = toAlac(src, dest);

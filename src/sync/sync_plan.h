@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace podbox {
@@ -52,6 +53,8 @@ struct SyncPlan {
 SyncPlan planSync(const HostLibrary& host, const Library& device,
                   const FingerprintStore& fingerprints,
                   const std::filesystem::path& deviceMount,
-                  const SyncOptions& options);
+                  const SyncOptions& options,
+                  const std::unordered_set<std::uint32_t>* removableIds =
+                      nullptr);
 
 }  // namespace podbox

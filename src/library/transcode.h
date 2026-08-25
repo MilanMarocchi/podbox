@@ -16,11 +16,17 @@ enum class ImportFormat {
 // under `fmt`, given its source path.
 std::string importExtension(ImportFormat fmt,
                             const std::filesystem::path& src);
+std::string importExtension(ImportFormat fmt,
+                            const std::filesystem::path& src,
+                            bool originalSupported);
 
 // Copies or transcodes `src` to `dest` (whose extension must equal
 // importExtension(fmt, src)). Returns false with a message in `error`.
 bool importAudio(ImportFormat fmt, const std::filesystem::path& src,
                  const std::filesystem::path& dest, std::string* error);
+bool importAudio(ImportFormat fmt, const std::filesystem::path& src,
+                 const std::filesystem::path& dest, std::string* error,
+                 bool originalSupported);
 
 // True when an MP3 encoder (ffmpeg or lame) is available on this system.
 bool mp3EncoderAvailable();

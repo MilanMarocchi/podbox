@@ -67,9 +67,13 @@ void App::frame() {
             view_ = View::Library;
     }
     applyFinishedScan();
+    // Drain a device copy before discovery can switch away from its target.
+    // The worker may become idle between frames, but its completed tracks
+    // still belong to the library that launched it.
+    applyCompletedAdds();
     watcher_.update(ImGui::GetTime());
     updateLibrary();
-    applyCompletedAdds();
+    finishPendingDeviceCopy();
     updateArtwork();
     updatePlayback();
 
@@ -103,16 +107,21 @@ void App::frame() {
     drawSyncModal();
     drawGetInfoModal();
 
-    if (ejectRequested_) {
-        ejectRequested_ = false;
+    if (!ejectRequestedMount_.empty()) {
         std::string err;
-        const fs::path mount = loadedMount_;
-        if (player_) player_->stop();
-        playingTrackId_ = 0;
+        const fs::path mount = std::move(ejectRequestedMount_);
+        const bool active = mount == loadedMount_;
+        ejectRequestedMount_.clear();
+        if (active && player_) player_->stop();
+        if (active) playingTrackId_ = 0;
         if (ejectDevice(mount, &err)) {
-            // Drop the library now; the watcher will confirm the unmount.
-            library_.reset();
-            loadedMount_.clear();
+            watcher_.forget(mount);
+            if (active) {
+                library_.reset();
+                loadedMount_.clear();
+                loadedDeviceInfo_.reset();
+                requestedDeviceMount_.clear();
+            }
             setStatus("Ejected — safe to disconnect");
         } else {
             setStatus("Could not eject: " + err);
@@ -125,6 +134,50 @@ void App::frame() {
 void App::setStatus(const std::string& msg) {
     statusMsg_ = msg;
     statusMsgUntil_ = ImGui::GetTime() + 4.0;
+}
+
+const DeviceInfo* App::activeDevice() const {
+    if (loadedMount_.empty()) return nullptr;
+    if (const DeviceInfo* live = watcher_.find(loadedMount_)) return live;
+    return loadedDeviceInfo_ && loadedDeviceInfo_->mountPoint == loadedMount_
+               ? &*loadedDeviceInfo_
+               : nullptr;
+}
+
+void App::activateDevice(const fs::path& mount) {
+    if (mount == loadedMount_) {
+        switchSource(View::Device);
+        return;
+    }
+    if (sync_.busy()) {
+        setStatus("Wait for the current device copy to finish");
+        return;
+    }
+    plEdit_ = {};
+    syncUi_.open = false;
+    dupes_.open = false;
+    restoreOpen_ = false;
+    getInfo_.open = false;
+    requestedDeviceMount_ = mount;
+    switchSource(View::Device);
+}
+
+bool App::connectedIpod() const {
+    const DeviceInfo* device = activeDevice();
+    return device && device->isIpod();
+}
+
+ImportTarget App::currentImportTarget() const {
+    ImportTarget target;
+    const DeviceInfo* device = activeDevice();
+    if (!device) return target;
+    target.mount = device->mountPoint;
+    target.musicDirectory = device->musicDirectory;
+    target.layout = device->isIpod()
+                        ? DeviceMusicLayout::IpodFolders
+                        : DeviceMusicLayout::ArtistAlbumFolders;
+    target.originalExtensions = device->originalExtensions;
+    return target;
 }
 
 void App::onFilesDropped(const std::vector<std::string>& paths) {
@@ -149,12 +202,12 @@ void App::onFilesDropped(const std::vector<std::string>& paths) {
         return;
     }
 
-    queueFilesToIpod(files);
+    queueFilesToDevice(files);
 }
 
-void App::queueFilesToIpod(const std::vector<fs::path>& files) {
-    if (!watcher_.device() || !library_) {
-        setStatus("Connect an iPod before adding songs");
+void App::queueFilesToDevice(const std::vector<fs::path>& files) {
+    if (!activeDevice() || !library_) {
+        setStatus("Connect a music player before adding songs");
         return;
     }
     // writeDatabase() refuses too, but catching it here means source files are
@@ -175,13 +228,41 @@ void App::queueFilesToIpod(const std::vector<fs::path>& files) {
             const std::string key = duplicateKey(t, MatchMode::Exact);
             if (!key.empty()) guard.metaKeys.insert(key);
         }
-        for (const auto& [dbid, fp] : fingerprints_.all())
-            if (fp.ok()) guard.hashes.insert(fp.hash);
+        for (const Track& t : library_->tracks)
+            if (const AudioFingerprint* fp = fingerprints_.get(t.dbid);
+                fp && fp->ok())
+                guard.hashes.insert(fp->hash);
     }
-    sync_.queueAdds(files, loadedMount_, importFormat_, std::move(guard));
+    sync_.queueAdds(files, currentImportTarget(), importFormat_,
+                    std::move(guard));
 }
 
-void App::addSelectedHostTracksToIpod() {
+void App::queueFilesToDevice(const std::vector<fs::path>& files,
+                             const fs::path& targetMount) {
+    if (files.empty()) return;
+    if (targetMount == loadedMount_) {
+        queueFilesToDevice(files);
+        return;
+    }
+    if (sync_.busy()) {
+        setStatus("Wait for the current device copy to finish");
+        return;
+    }
+    pendingCopyMount_ = targetMount;
+    pendingCopyFiles_ = files;
+    activateDevice(targetMount);
+    setStatus("Opening the selected player…");
+}
+
+void App::finishPendingDeviceCopy() {
+    if (pendingCopyFiles_.empty() || loadedMount_ != pendingCopyMount_) return;
+    std::vector<fs::path> files = std::move(pendingCopyFiles_);
+    pendingCopyFiles_.clear();
+    pendingCopyMount_.clear();
+    queueFilesToDevice(files);
+}
+
+void App::addSelectedHostTracksToDevice(const fs::path& targetMount) {
     if (!viewingHost() || selection_.empty()) return;
 
     std::vector<fs::path> files;
@@ -211,7 +292,7 @@ void App::addSelectedHostTracksToIpod() {
         setStatus("Adding " + plural(files.size(), "song", "songs") +
                   "; skipped " +
                   std::to_string(unavailable) + " unavailable");
-    queueFilesToIpod(files);
+    queueFilesToDevice(files, targetMount);
 }
 
 void App::applyCompletedAdds() {
@@ -228,7 +309,13 @@ void App::applyCompletedAdds() {
             continue;
         }
         done.track.id = nextTrackId_++;
-        done.track.dbid = rng();
+        if (connectedIpod()) {
+            done.track.dbid = rng();
+        } else {
+            done.track.dbid = filesystemTrackDbid(done.track.location);
+            filesystemState_.managedTracks.insert(done.track.location);
+            managedFilesystemTrackIds_.insert(done.track.id);
+        }
         // Record what this track was made from, before any transcode is
         // forgotten: this is what lets a later drop of the same source file
         // be recognised even though the device holds a different encoding.
@@ -251,6 +338,7 @@ void App::applyCompletedAdds() {
 }
 
 bool App::appleMusicSyncing() const {
+    if (!connectedIpod()) return false;
     if (loadedMount_.empty()) return false;
     // Apple Music rewrites both of these continuously while it syncs. A
     // timestamp newer than our own last write means the change was not ours.
@@ -290,7 +378,7 @@ void App::rotateBackups(const fs::path& dbPath) {
 
 std::vector<fs::path> App::availableBackups() const {
     std::vector<fs::path> out;
-    if (loadedMount_.empty()) return out;
+    if (loadedMount_.empty() || !connectedIpod()) return out;
     const fs::path dbPath = dbFilePath();
     std::error_code ec;
     auto usable = [&](const fs::path& candidate) {
@@ -343,6 +431,10 @@ std::vector<fs::path> App::availableBackups() const {
 
 bool App::writesSupported() const {
     if (!library_) return false;
+    if (!connectedIpod()) {
+        const DeviceInfo* device = activeDevice();
+        return device && device->writable;
+    }
     if (itunesSdKind_ == ItunesSdKind::Legacy) return false;
     if (library_->hashingScheme == kChecksumNone) return true;
     // Hash devices become writable only once we have shown we can reproduce
@@ -354,6 +446,7 @@ bool App::writesSupported() const {
 }
 
 std::string App::writeBlockReason() const {
+    if (!connectedIpod()) return "This player's music folder is read-only";
     if (itunesSdKind_ == ItunesSdKind::Legacy)
         return "This older iPod shuffle uses an unsupported database format";
     if (library_ && library_->hashingScheme == kChecksumHashAB)
@@ -382,10 +475,10 @@ void App::verifyChecksum() {
     hashAbVerified_ = false;
     hashAbUuid_.clear();
     hashAbNonce_.clear();
-    if (!library_ || loadedMount_.empty()) return;
+    if (!library_ || loadedMount_.empty() || !connectedIpod()) return;
     if (library_->hashingScheme == kChecksumNone) return;
 
-    const auto& dev = watcher_.device();
+    const DeviceInfo* dev = activeDevice();
     if (!dev) return;
     const std::vector<std::uint8_t> guid =
         parseFirewireGuid(dev->firewireGuid);
@@ -491,6 +584,22 @@ bool App::writeDatabase() {
     if (appleMusicSyncing()) {
         setStatus("Apple Music is syncing this iPod — try again when it finishes");
         return false;
+    }
+    if (!connectedIpod()) {
+        std::string error;
+        const DeviceInfo* device = activeDevice();
+        if (!device ||
+            !saveFilesystemPlayer(loadedMount_, device->musicDirectory,
+                                  *library_, &filesystemState_, &error)) {
+            setStatus(error.empty() ? "Could not update this player" : error);
+            return false;
+        }
+        fingerprints_.prune(*library_);
+        if (!fingerprints_.save(loadedMount_)) {
+            setStatus("Could not save PodBox's fingerprints on this player");
+            return false;
+        }
+        return true;
     }
     const fs::path dbPath = dbFilePath();
     const fs::path sdPath =
@@ -679,6 +788,8 @@ void App::setTrackRating(std::uint32_t trackId, int rating) {
         return;
     }
 
+    const DeviceInfo* device = activeDevice();
+    if (!device || !device->capabilities.ratings) return;
     if (!library_) return;
     const auto it = trackIndexById_.find(trackId);
     if (it == trackIndexById_.end()) return;
@@ -708,15 +819,25 @@ int App::performDeleteMany(
         for (const auto& [from, to] : *remap) doomed.erase(to);
 
     std::error_code ec;
+    std::unordered_set<std::uint32_t> failed;
     int removed = 0;
     for (std::uint32_t id : doomed) {
         const auto it = trackIndexById_.find(id);
         if (it == trackIndexById_.end()) continue;
-        fs::remove(locationToPath(loadedMount_,
-                                  library_->tracks[it->second].location),
-                   ec);
+        const std::string location = library_->tracks[it->second].location;
+        ec.clear();
+        fs::remove(locationToPath(loadedMount_, location), ec);
+        if (ec) {
+            failed.insert(id);
+            continue;
+        }
+        if (!connectedIpod()) {
+            filesystemState_.managedTracks.erase(location);
+            managedFilesystemTrackIds_.erase(id);
+        }
         ++removed;
     }
+    for (std::uint32_t id : failed) doomed.erase(id);
     if (removed == 0) return 0;
 
     std::erase_if(library_->tracks,
@@ -821,10 +942,8 @@ void App::selectRow(int row, std::uint32_t trackId, bool shift, bool cmd) {
                 break;
             }
         if (anchorRow >= 0) {
-            const int lo = std::min(anchorRow, row), hi = std::max(anchorRow, row);
-            selection_.clear();
-            for (int i = lo; i <= hi && i < int(visible_.size()); ++i)
-                selection_.push_back(shown->tracks[visible_[i].second].id);
+            selection_ =
+                displayedTrackRange(*shown, visible_, anchorRow, row);
             selectedTrackId_ = trackId;
             return;
         }
@@ -961,34 +1080,75 @@ void App::playRelative(int delta) {
 }
 
 void App::updateLibrary() {
-    const auto& dev = watcher_.device();
-    if (!dev) {
+    const auto& devices = watcher_.devices();
+    if (!loadedMount_.empty() && !watcher_.find(loadedMount_) && sync_.busy()) {
+        setStatus("The active player disconnected while files were copying");
+        return;
+    }
+    if (devices.empty()) {
         if (library_ || !loadedMount_.empty()) {
             if (player_) player_->stop();
             playingTrackId_ = 0;
             library_.reset();
             libraryError_.clear();
             loadedMount_.clear();
+            loadedDeviceInfo_.reset();
+            requestedDeviceMount_.clear();
+            filesystemState_ = {};
+            managedFilesystemTrackIds_.clear();
             trackIndexById_.clear();
             itunesSdKind_ = ItunesSdKind::None;
             view_ = hostView_.tracks.empty() ? View::Device : View::Library;
             playlistIndex_ = -1;
             visibleDirty_ = true;
         }
+        pendingCopyFiles_.clear();
+        pendingCopyMount_.clear();
         return;
     }
-    if (dev->mountPoint == loadedMount_) return;
-    loadedMount_ = dev->mountPoint;
-    itunesSdKind_ = detectItunesSd(
-        loadedMount_ / "iPod_Control" / "iTunes" / "iTunesSD");
 
-    ParseResult res = parseItunesDb(dbFilePath());
-    library_ = std::move(res.library);
-    libraryError_ = res.error;
-    if (library_ && itunesSdKind_ == ItunesSdKind::Modern)
-        reconcileShufflePlaylistIds(
-            *library_,
+    const DeviceInfo* dev = nullptr;
+    if (!requestedDeviceMount_.empty())
+        dev = watcher_.find(requestedDeviceMount_);
+    if (!requestedDeviceMount_.empty() && !dev &&
+        pendingCopyMount_ == requestedDeviceMount_) {
+        pendingCopyFiles_.clear();
+        pendingCopyMount_.clear();
+        setStatus("That player is no longer connected");
+    }
+    if (!dev && !loadedMount_.empty()) dev = watcher_.find(loadedMount_);
+    if (!dev) dev = &devices.front();
+    requestedDeviceMount_ = dev->mountPoint;
+    if (dev->mountPoint == loadedMount_) return;
+
+    if (player_) player_->stop();
+    playingTrackId_ = 0;
+    plEdit_ = {};
+    refreshPlaylistVoiceOver_.clear();
+    removedPlaylistVoiceOver_.clear();
+    ownWriteTime_ = {};
+    loadedMount_ = dev->mountPoint;
+    loadedDeviceInfo_ = *dev;
+    filesystemState_ = {};
+    managedFilesystemTrackIds_.clear();
+    if (dev->isIpod()) {
+        itunesSdKind_ = detectItunesSd(
             loadedMount_ / "iPod_Control" / "iTunes" / "iTunesSD");
+        ParseResult res = parseItunesDb(dbFilePath());
+        library_ = std::move(res.library);
+        libraryError_ = res.error;
+        if (library_ && itunesSdKind_ == ItunesSdKind::Modern)
+            reconcileShufflePlaylistIds(
+                *library_,
+                loadedMount_ / "iPod_Control" / "iTunes" / "iTunesSD");
+    } else {
+        itunesSdKind_ = ItunesSdKind::None;
+        FilesystemPlayerLoad loaded = loadFilesystemPlayer(
+            loadedMount_, dev->musicDirectory, &filesystemState_);
+        library_ = std::move(loaded.library);
+        managedFilesystemTrackIds_ = std::move(loaded.managedTrackIds);
+        libraryError_ = std::move(loaded.error);
+    }
     trackIndexById_.clear();
     fingerprints_.load(loadedMount_);
     nextTrackId_ = 100;
@@ -1004,7 +1164,7 @@ void App::updateLibrary() {
     // scratch on every load; the on-disk Play Counts file is only cleared
     // once its contents have been written into the DB (see writeDatabase).
     playCountsUnmatched_ = false;
-    if (library_) {
+    if (library_ && dev->isIpod()) {
         const PlayCountsMerge merge = mergePlayCounts(
             loadedMount_ / "iPod_Control" / "iTunes" / "Play Counts",
             *library_);
@@ -1025,7 +1185,7 @@ void App::updateLibrary() {
     }
 
     verifyChecksum();
-    pullPlayCountsToHost();
+    if (dev->isIpod()) pullPlayCountsToHost();
 
     switchSource(library_ ? View::Music : View::Device);
     // A new device means the cached artwork texture describes a track that no
@@ -1058,7 +1218,7 @@ std::uint32_t App::viewMediaType() const {
 
 bool App::showingTracks() const {
     if (view_ == View::Library) return true;
-    return watcher_.device() && library_ && view_ != View::Device;
+    return activeDevice() && library_ && view_ != View::Device;
 }
 
 const std::unordered_map<std::uint32_t, int>* App::shownIndex() const {

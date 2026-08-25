@@ -35,6 +35,18 @@ struct DupeGuard {
     std::unordered_set<std::uint64_t> hashes;   // AudioFingerprint::hash
 };
 
+enum class DeviceMusicLayout {
+    IpodFolders,
+    ArtistAlbumFolders,
+};
+
+struct ImportTarget {
+    std::filesystem::path mount;
+    std::filesystem::path musicDirectory;
+    DeviceMusicLayout layout = DeviceMusicLayout::IpodFolders;
+    std::unordered_set<std::string> originalExtensions;
+};
+
 // Copies queued audio files onto the device on a worker thread and reads
 // their metadata. The UI thread polls takeCompleted() and owns all library
 // mutation and DB writing.
@@ -53,7 +65,7 @@ public:
     // Copies (or transcodes, per `fmt`) each file onto the device, skipping
     // any that `guard` already knows about.
     void queueAdds(const std::vector<std::filesystem::path>& files,
-                   const std::filesystem::path& mount, ImportFormat fmt,
+                   ImportTarget target, ImportFormat fmt,
                    DupeGuard guard = {});
     std::vector<Completed> takeCompleted();
 
@@ -75,7 +87,7 @@ private:
     std::condition_variable cv_;
     std::deque<std::filesystem::path> pending_;
     std::vector<Completed> completed_;
-    std::filesystem::path mount_;
+    ImportTarget target_;
     ImportFormat importFmt_ = ImportFormat::Original;
     DupeGuard guard_;
     std::string current_;

@@ -1,14 +1,42 @@
 # PodBox
 
-A standalone iPod manager for macOS — manage the music library on a classic
-iPod the way the old iTunes and apps like PodCenter let you: **drag songs on,
-delete songs off, build playlists — no full-library sync, no iTunes
-required.** Built in C++ with [Dear ImGui](https://github.com/ocornut/imgui),
-styled after iTunes 10.
+A standalone portable music-player manager for macOS. PodBox understands the
+private databases used by classic iPods and the ordinary `MUSIC` folders used
+by USB-storage players such as non-Android Sony Walkmans: **drag songs on,
+delete songs off, build playlists, or review and run a full-library sync — no
+iTunes required.** Built in C++ with
+[Dear ImGui](https://github.com/ocornut/imgui), styled after iTunes 10.
 
 ![PodBox](docs/screenshot.png)
 
 ## Features
+
+### Other USB music players
+
+- **Mounted-player support.** A removable volume containing `MUSIC`, `Music`,
+  or `Storage Media/Music` is treated as a folder-based player. This targets
+  USB-storage Sony Walkman families and gives other DAPs and prepared microSD
+  cards a conservative generic profile.
+- **Readable storage.** New files use
+  `MUSIC/Artist/Album/01 - Title.ext` rather than iPod-style scrambled names.
+  Existing tagged audio is indexed in place with TagLib.
+- **Native FLAC.** The filesystem-player profile keeps every currently
+  accepted format unchanged, including FLAC. Conversion remains available as
+  an explicit import setting.
+- **M3U/M3U8 playlists.** Existing playlists are read using paths relative to
+  the playlist file. Untouched playlists remain byte-for-byte unchanged;
+  playlists created or edited by PodBox are written as portable UTF-8 M3U8.
+- **Conservative mirror deletion.** PodBox records the files it copied under
+  `.podbox` on the player. Full-library sync may automatically remove only
+  those managed files; music placed there by another application is left
+  alone. Explicit per-track deletion still requires confirmation.
+- **Multiple players at once.** Every mounted iPod, Walkman, and folder player
+  has its own row in the sidebar. Selecting one loads only that device's music
+  and playlists, and every playlist section is labelled with its device name.
+
+Android-based Walkmans such as the NW-A100/A300 and ZX500/ZX700 use MTP rather
+than mounting in Finder and are not supported yet. Their transport is planned
+as a separate backend; they are not mistaken for filesystem paths.
 
 ### On the iPod
 
@@ -35,9 +63,10 @@ styled after iTunes 10.
   and press Delete), with a confirmation dialog.
 - **Playlists** — create, rename, delete, add/remove tracks (right-click a song
   → *Add to Playlist*), and drag to reorder within a playlist.
-- **Multi-select** with shift-click, click-drag across a range, or ⌘-click to
-  toggle. The context menu adapts: *Rate These Songs*, *Remove 12 Songs from
-  iPod*.
+- **Multi-select** with shift-click, click-drag across a range, ⌘-click to
+  toggle, or ⌘A for every visible song. The context menu adapts: *Rate These
+  Songs*, *Remove 12 Songs from iPod*, or *Copy 12 Songs to…* from the Mac
+  library.
 - **Ratings** — five clickable stars in the track list, or right-click →
   *Rating*. Written straight into the database.
 - **Get Info** (⌘I) to edit name, artist, album, genre, year and track number.
@@ -68,9 +97,9 @@ styled after iTunes 10.
   or modifies your files**. The index lives in
   `~/Library/Application Support/PodBox/library.tsv`.
 - **Send exactly what you selected.** Click-drag across songs in the Mac
-  library, right-click the selection, then choose *Add N Songs to iPod*. It
-  uses the same duplicate checks, transcoding queue and one final database
-  write as dropping those files onto the window.
+  library, right-click the selection, then choose *Copy N Songs to…* and the
+  destination device. It uses the same duplicate checks, transcoding queue and
+  one final database write as dropping those files onto the window.
 - **Watch folders** — add and remove them under *Folders…* in the sidebar, with
   a per-folder enable switch and a live song count. Rescanning is incremental:
   files whose size and modification time are unchanged are skipped. Files that
@@ -83,7 +112,7 @@ styled after iTunes 10.
   again after cancelling and it skips what's already there. Streaming-only
   entries, tracks whose file is missing, and DRM-protected `.m4p` files are
   reported and skipped — a classic iPod cannot play the last of those.
-- **Sync to the iPod** — PodBox diffs the two libraries and **shows you the
+- **Sync to the player** — PodBox diffs the two libraries and **shows you the
   plan before writing anything**: how many songs and bytes would be copied,
   what's already there, what's missing. Removal is opt-in, off by default, and
   needs a second explicit confirmation; songs that exist only on the iPod are
@@ -236,16 +265,18 @@ flake is macOS-only for that reason.
 
 ## Usage
 
-1. Plug in your iPod and wait for it to mount. PodBox detects it and shows the
-   model, serial, firmware and capacity under the **device** entry.
+1. Plug in one or more iPods or mounted USB music players and wait for them to
+   appear in Finder. PodBox lists every detected player under **Devices**;
+   select one to see its profile, music and device-specific playlists.
 2. Click **Music** to see every song, or a **playlist** to see its contents.
    Sort by clicking a column header; filter with the search box.
 3. **Add music**: drag audio files or folders onto the window, or click-drag to
-   select a range in the Mac Library and right-click → *Add N Songs to iPod*.
+   select a range in the Mac Library and right-click → *Copy N Songs to…*, then
+   choose the destination player.
    Accepted formats are MP3, AAC/ALAC (`.m4a`/`.m4b`), WAV, AIFF and FLAC.
    Pick an import format
-   under the device view (*Keep original*, *ALAC*, or *MP3*); FLAC is always
-   converted so it plays on the iPod.
+   under the device view (*Keep original*, *ALAC*, or *MP3*). Classic iPods
+   convert FLAC to ALAC; the mounted-player profile keeps FLAC unchanged.
 4. **Play a song**: double-click it, or use the play/prev/next controls and
    volume in the toolbar. Drag the scrubber to seek. The Mac keyboard's
    Play/Pause key uses the same control: it pauses the current track, resumes
@@ -253,13 +284,13 @@ flake is macOS-only for that reason.
    none is selected). PodBox registers with macOS's now-playing service, so
    the key continues to work while its window is in the background; PodBox
    must be running.
-5. **Remove music**: right-click a song → *Remove from iPod*.
+5. **Remove music**: right-click a song → *Remove from Player*.
 6. **Playlists**: click *+ New Playlist*, or right-click a song → *Add to
    Playlist*. Right-click a playlist to rename or delete it. Drag rows to
    reorder a playlist.
 7. **Build a Mac library**: under **Library** in the sidebar, use *Folders…* to
    add the folders your music lives in, then *Rescan*. Use *Apple Music…* to
-   copy tracks out of Music.app. Then *Sync Library to iPod…* in the device
+   copy tracks out of Music.app. Then *Sync Library to Player…* in the device
    pane.
 8. **Eject** with the button on the device row before unplugging.
 
@@ -276,7 +307,13 @@ iPod accepts a 24-bit ALAC file and then silently refuses to play it.
 
 ## Safety
 
-PodBox writes directly to your iPod's database, so it is careful:
+On folder-based players, PodBox uses atomic playlist and manifest writes. It
+records which audio files it imported, and automatic mirror sync may delete
+only those managed files. Audio discovered on the player but not imported by
+PodBox is never selected for automatic removal.
+
+PodBox writes directly to an iPod's database, so that backend has additional
+protections:
 
 - **Five rolling backups.** Before every write the current database is rotated
   into `iTunesDB.podbox-bak.1` … `.5` (`iTunesCDB…` on newer nanos). The very
@@ -343,6 +380,7 @@ The build also produces small utilities used for testing. With Nix they are in
 | `library_test` | `[show\|scan\|add <dir>\|health\|dupes]` — exercise the Mac library; defaults to `show`. Touches only `~/Library/Application Support/PodBox/`. |
 | `applemusic_test` | `[summary\|list <n>\|copy <n>\|copy all]` — defaults to `summary`, which reads everything and writes nothing. `copy` writes into `~/Music/PodBox`. |
 | `sync_test` | `<ipod-mount> [--remove]` — print the sync plan. Entirely read-only; needs a saved Mac library. |
+| `filesystem_player_test` | Synthetic Sony-style mounted-player detection, scanning, managed-file safety, readable allocation, and M3U8 round-trip tests. |
 | `dedupe_test` | `[<music-dir> [verbose]]`, or `--fp <file>...` to print and compare fingerprints. |
 | `hash58_test`, `hash72_test`, `hashab_test` | Published cryptographic vectors plus complete database-writer checks. |
 | `itunessqlite_test` | Stages, rewrites, signs and validates a device-like nano 6G/7G companion bundle. |
@@ -367,6 +405,7 @@ file that is merged on connect.
 
 ## Roadmap
 
+- Android/MTP transport for newer Sony Walkmans and other MTP players
 - Album artwork **on** the device (`ArtworkDB` + `.ithmb` thumbnails)
 - Podcast episode metadata (description, release date) and audiobook
   resume-position, which need parts of the database PodBox carries through

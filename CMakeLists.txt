@@ -136,6 +136,7 @@ set(TAGLIB_INCLUDES
 
 add_library(podbox_core STATIC
   src/device/device_watcher.cpp
+  src/device/filesystem_player.cpp
   src/device/ipod_device.cpp
   $<IF:$<BOOL:${APPLE}>,src/device/usb_serial_mac.cpp,src/device/usb_serial_stub.cpp>
   src/itdb/hash58.cpp
@@ -258,6 +259,9 @@ target_link_libraries(applemusic_test PRIVATE podbox_core)
 add_executable(sync_test tools/sync_test.cpp)
 target_link_libraries(sync_test PRIVATE podbox_core)
 
+add_executable(filesystem_player_test tools/filesystem_player_test.cpp)
+target_link_libraries(filesystem_player_test PRIVATE podbox_core)
+
 # Needs imgui for the font atlas that text measurement depends on, which is
 # why the drawing helpers are tested apart from dedupe_test.
 add_executable(ui_test tools/ui_test.cpp src/app/app_util.cpp)
@@ -317,7 +321,7 @@ endif()
 
 if(PODBOX_INSTALL_TOOLS)
   install(TARGETS itdb_dump podbox_add playcounts_test dedupe_test
-                  library_test applemusic_test sync_test ui_test
+                  library_test applemusic_test sync_test filesystem_player_test ui_test
                   hash58_test hash72_test hashab_test itunessqlite_test itunessd_test
                   shuffle_repair
           RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -328,6 +332,7 @@ endif()
 enable_testing()
 add_test(NAME dedupe COMMAND dedupe_test)
 add_test(NAME sync COMMAND sync_test --self-test)
+add_test(NAME filesystem_player COMMAND filesystem_player_test)
 add_test(NAME ui COMMAND ui_test)
 add_test(NAME hash58 COMMAND hash58_test)
 add_test(NAME hash72 COMMAND hash72_test)

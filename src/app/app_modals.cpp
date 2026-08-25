@@ -46,12 +46,12 @@ void App::drawDeleteModal() {
         aqua::heading(fonts_,
                       ("Are you sure you want to remove these " +
                        std::to_string(selection_.size()) +
-                       " songs from your iPod?")
+                       " songs from your player?")
                           .c_str());
     else
         aqua::heading(fonts_, ("Are you sure you want to remove \u201c" +
                                library_->tracks[it->second].title +
-                               "\u201d from your iPod?")
+                               "\u201d from your player?")
                                   .c_str());
     aqua::body(fonts_,
                many ? "Their audio files will be deleted from the device. "
@@ -344,7 +344,8 @@ void App::drawAppleMusicModal() {
                    apple_.read.fileMissing);
     if (apple_.read.drmProtected)
         aqua::body(fonts_,
-                   "%d skipped — DRM protected, an iPod cannot play these",
+                   "%d skipped — DRM protected, a portable player cannot "
+                   "play these",
                    apple_.read.drmProtected);
 
     aqua::divider();
@@ -485,9 +486,13 @@ void App::drawGetInfoModal() {
                                ? "This rewrites your own files on disk."
                                : "Off: only PodBox's library is changed.");
     } else {
-        aqua::body(fonts_,
-                   "Changes the iPod's database only — the audio files on "
-                   "the device keep their own tags.");
+        aqua::body(
+            fonts_,
+            connectedIpod()
+                ? "Changes the iPod's database only — the audio files on "
+                  "the device keep their own tags."
+                : "Changes the tags in the copied audio files so this "
+                  "player sees the updated information.");
     }
 
     aqua::divider();
@@ -538,6 +543,15 @@ void App::drawGetInfoModal() {
                 if (getInfo_.mediaChoice >= 0)
                     t.mediaType = kMediaChoices[getInfo_.mediaChoice].type;
                 ++changed;
+                // Folder-based players build their own library from file
+                // tags, so database-only editing would disappear on the next
+                // reconnect. iPods keep the established database-only path.
+                if (!connectedIpod()) {
+                    std::string err;
+                    if (!writeFileTags(
+                            locationToPath(loadedMount_, t.location), t, &err))
+                        ++tagFailures;
+                }
             }
         }
 
@@ -563,8 +577,10 @@ void App::refreshSyncPlan() {
     syncUi_.dirty = false;
     syncUi_.plan = {};
     if (!library_) return;
+    const auto* removable =
+        connectedIpod() ? nullptr : &managedFilesystemTrackIds_;
     syncUi_.plan = planSync(host_, *library_, fingerprints_, loadedMount_,
-                            syncUi_.options);
+                            syncUi_.options, removable);
 }
 
 void App::startSync() {
@@ -603,18 +619,22 @@ void App::startSync() {
         const std::string key = duplicateKey(t, MatchMode::Exact);
         if (!key.empty()) guard.metaKeys.insert(key);
     }
-    for (const auto& [dbid, fp] : fingerprints_.all())
-        if (fp.ok()) guard.hashes.insert(fp.hash);
+    for (const Track& t : library_->tracks)
+        if (const AudioFingerprint* fp = fingerprints_.get(t.dbid);
+            fp && fp->ok())
+            guard.hashes.insert(fp->hash);
 
-    sync_.queueAdds(files, loadedMount_, importFormat_, std::move(guard));
+    sync_.queueAdds(files, currentImportTarget(), importFormat_,
+                    std::move(guard));
     setStatus("Syncing " + plural(int(files.size()), "song", "songs") +
-              " to the iPod…");
+              " to the player…");
 }
 
 void App::drawSyncModal() {
     if (!syncUi_.open) return;
-    if (!ImGui::IsPopupOpen("Sync to iPod")) ImGui::OpenPopup("Sync to iPod");
-    if (!aqua::beginSheet("Sync to iPod", 560.0f)) return;
+    if (!ImGui::IsPopupOpen("Sync to Player"))
+        ImGui::OpenPopup("Sync to Player");
+    if (!aqua::beginSheet("Sync to Player", 560.0f)) return;
     if (!library_) {
         syncUi_.open = false;
         ImGui::CloseCurrentPopup();
@@ -623,9 +643,12 @@ void App::drawSyncModal() {
     }
     if (syncUi_.dirty) refreshSyncPlan();
 
-    aqua::heading(fonts_, "Sync your library to this iPod");
+    aqua::heading(fonts_, connectedIpod()
+                              ? "Sync your library to this iPod"
+                              : "Sync your library to this player");
     aqua::body(fonts_,
-               "Everything in your Mac library that isn't already on the iPod "
+               "Everything in your Mac library that isn't already on the "
+               "player "
                "is copied over. Nothing is written until you press Sync.");
     aqua::divider();
 
@@ -633,30 +656,37 @@ void App::drawSyncModal() {
                 plural(int(syncUi_.plan.toCopy.size()), "song", "songs").c_str(),
                 formatBytes(syncUi_.plan.bytesToCopy).c_str());
     aqua::body(fonts_,
-               "%d already on the iPod · %d duplicates skipped · %d "
+               "%d already on the player · %d duplicates skipped · %d "
                "missing from your Mac",
                syncUi_.plan.alreadyOnDevice, syncUi_.plan.skippedDuplicate,
                syncUi_.plan.skippedMissing);
     if (!syncUi_.plan.missingDeviceFiles.empty())
         aqua::body(fonts_,
-                   "%s missing from the iPod. PodBox will restore any copy "
+                   "%s missing from the player. PodBox will restore any copy "
                    "available in your Mac library.",
                    plural(int(syncUi_.plan.missingDeviceFiles.size()),
                           "song file is", "song files are")
                        .c_str());
-    aqua::body(fonts_,
-               "FLAC and other lossless files are converted to 16-bit Apple "
-               "Lossless so the iPod can play them.");
+    aqua::body(
+        fonts_,
+        connectedIpod()
+            ? "FLAC and other lossless files are converted to 16-bit Apple "
+              "Lossless so the iPod can play them."
+            : "Formats supported by this player, including FLAC, stay "
+              "unchanged when Keep original format is selected.");
 
     ImGui::Spacing();
-    if (ImGui::Checkbox("Also remove songs that aren't in my library",
+    if (ImGui::Checkbox(connectedIpod()
+                            ? "Also remove songs that aren't in my library"
+                            : "Also remove PodBox-managed songs that aren't "
+                              "in my library",
                         &syncUi_.options.removeFromDevice)) {
         syncUi_.dirty = true;
         syncUi_.confirmRemove = false;
     }
     if (syncUi_.options.removeFromDevice) {
         ImGui::TextColored(v4(pal::Warning),
-                           "This deletes %s from the iPod, freeing %s.",
+                           "This deletes %s from the player, freeing %s.",
                            plural(int(syncUi_.plan.toRemove.size()), "song",
                                   "songs")
                                .c_str(),
@@ -665,18 +695,18 @@ void App::drawSyncModal() {
         // this is the only step in a sync that destroys music outright.
         if (syncUi_.plan.deviceOnly > 0)
             ImGui::TextColored(v4(pal::Danger),
-                               "%s exist only on the iPod — deleting them "
+                               "%s exist only on the player — deleting them "
                                "loses them for good.",
                                plural(syncUi_.plan.deviceOnly, "song", "songs")
                                    .c_str());
         if (!syncUi_.plan.toRemove.empty())
-            ImGui::Checkbox("Yes, delete those songs from the iPod",
+            ImGui::Checkbox("Yes, delete those songs from the player",
                             &syncUi_.confirmRemove);
     }
 
     // Capacity guard: refuse a plan that cannot fit rather than filling the
     // device and failing part way.
-    const auto& dev = watcher_.device();
+    const DeviceInfo* dev = activeDevice();
     bool fits = true;
     if (dev && dev->freeBytes > 0) {
         const std::uint64_t after =
@@ -711,7 +741,7 @@ void App::drawSyncModal() {
     }
     ImGui::EndDisabled();
     if (syncUi_.plan.empty())
-        aqua::body(fonts_, "Nothing to do — the iPod already matches.");
+        aqua::body(fonts_, "Nothing to do — the player already matches.");
     aqua::endSheet();
 }
 
@@ -740,7 +770,7 @@ void App::startVerifyPass() {
         items.push_back({t.dbid, locationToPath(loadedMount_, t.location)});
     }
     if (items.empty()) {
-        setStatus("Every song on this iPod is already verified");
+        setStatus("Every song on this player is already verified");
         return;
     }
     dupes_.verify.start(std::move(items));
@@ -768,7 +798,7 @@ void App::drawDuplicatesModal() {
     }
     if (dupes_.dirty) refreshDuplicates();
 
-    aqua::heading(fonts_, "Duplicate songs on this iPod");
+    aqua::heading(fonts_, "Duplicate songs on this player");
 
     int mode = int(dupes_.mode);
     if (ImGui::RadioButton("Exact", &mode, int(MatchMode::Exact)))
@@ -794,7 +824,7 @@ void App::drawDuplicatesModal() {
         if (aqua::button("Stop", ImVec2(70, 0))) dupes_.verify.cancel();
     } else {
         ImGui::BeginDisabled(unverified <= 0);
-        if (aqua::button("Verify Files on iPod", ImVec2(160, 0)))
+        if (aqua::button("Verify Player Files", ImVec2(160, 0)))
             startVerifyPass();
         ImGui::EndDisabled();
         if (unverified > 0) {
@@ -1159,7 +1189,7 @@ void App::drawDeletePlaylistModal() {
                    "\u201d?")
                       .c_str());
     aqua::body(fonts_,
-               "The songs stay on the iPod; only the playlist is removed.");
+               "The songs stay on the player; only the playlist is removed.");
 
     aqua::divider();
     aqua::rightAlignButtons(2, 92.0f);
@@ -1206,11 +1236,19 @@ void App::trackContextMenu(const Track& t) {
 
     if (viewingHost()) {
         const std::string label =
-            n > 1 ? ("Add " + std::to_string(n) + " Songs to iPod")
-                  : "Add to iPod";
-        ImGui::BeginDisabled(!watcher_.device() || !library_ ||
-                             !writesSupported());
-        if (ImGui::MenuItem(label.c_str())) addSelectedHostTracksToIpod();
+            n > 1 ? ("Copy " + std::to_string(n) + " Songs to…")
+                  : "Copy to…";
+        ImGui::BeginDisabled(watcher_.devices().empty() || sync_.busy());
+        if (ImGui::BeginMenu(label.c_str())) {
+            for (int i = 0; i < int(watcher_.devices().size()); ++i) {
+                const DeviceInfo& target = watcher_.devices()[i];
+                ImGui::PushID(i);
+                if (ImGui::MenuItem(target.volumeName.c_str()))
+                    addSelectedHostTracksToDevice(target.mountPoint);
+                ImGui::PopID();
+            }
+            ImGui::EndMenu();
+        }
         ImGui::EndDisabled();
         ImGui::Separator();
     }
@@ -1227,6 +1265,11 @@ void App::trackContextMenu(const Track& t) {
         ImGui::EndMenu();
     }
 
+    const DeviceInfo* device = activeDevice();
+    const bool canRate =
+        viewingHost() ||
+        (device && device->capabilities.ratings && writesSupported());
+    ImGui::BeginDisabled(!canRate);
     if (ImGui::BeginMenu(n > 1 ? "Rate These Songs" : "Rating")) {
         static const char* kStars[] = {"No rating", "1 star", "2 stars",
                                        "3 stars", "4 stars", "5 stars"};
@@ -1235,6 +1278,7 @@ void App::trackContextMenu(const Track& t) {
                 for (std::uint32_t id : selection_) setTrackRating(id, i * 20);
         ImGui::EndMenu();
     }
+    ImGui::EndDisabled();
 
     if (view_ == View::Playlist && playlistIndex_ >= 0) {
         if (ImGui::MenuItem("Remove from Playlist")) {
@@ -1251,8 +1295,8 @@ void App::trackContextMenu(const Track& t) {
     ImGui::Separator();
     if (!viewingHost()) {
         const std::string label =
-            n > 1 ? ("Remove " + std::to_string(n) + " Songs from iPod")
-                  : "Remove from iPod";
+            n > 1 ? ("Remove " + std::to_string(n) + " Songs from Player")
+                  : "Remove from Player";
         if (ImGui::MenuItem(label.c_str())) deleteRequestId_ = t.id;
     }
     ImGui::EndDisabled();

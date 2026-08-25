@@ -2,7 +2,9 @@
 
 #include "device/usb_serial.h"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -209,57 +211,177 @@ std::string cleanFirmwareVersion(const std::string& value) {
 
 }  // namespace
 
-std::optional<IpodInfo> findIpod() {
+namespace {
+
+std::optional<IpodInfo> describeIpodMount(const fs::path& mount) {
     std::error_code ec;
-    for (const auto& entry : fs::directory_iterator(kVolumesRoot, ec)) {
-        const fs::path control = entry.path() / "iPod_Control";
-        if (!fs::is_directory(control, ec)) continue;
+    const fs::path control = mount / "iPod_Control";
+    if (!fs::is_directory(control, ec)) return std::nullopt;
 
-        IpodInfo info;
-        info.mountPoint = entry.path();
-        info.volumeName = entry.path().filename().string();
+    IpodInfo info;
+    info.kind = DeviceKind::Ipod;
+    info.mountPoint = mount;
+    info.musicDirectory = fs::path("iPod_Control") / "Music";
+    info.volumeName = mount.filename().string();
+    info.capabilities = {/*playlists=*/true, /*ratings=*/true,
+                         /*playCounts=*/true,
+                         /*databaseBackups=*/true};
+    info.originalExtensions = {".mp3", ".m4a", ".m4b", ".aac",
+                               ".wav", ".aif", ".aiff"};
 
-        auto sysinfo = parseSysInfo(control / "Device" / "SysInfo");
-        if (auto it = sysinfo.find("ModelNumStr"); it != sysinfo.end())
-            info.modelNumber = cleanModelNumber(it->second);
-        if (auto it = sysinfo.find("pszSerialNumber"); it != sysinfo.end())
-            info.serialNumber = it->second;
-        if (auto it = sysinfo.find("visibleBuildID"); it != sysinfo.end())
-            info.firmwareVersion = cleanFirmwareVersion(it->second);
+    auto sysinfo = parseSysInfo(control / "Device" / "SysInfo");
+    if (auto it = sysinfo.find("ModelNumStr"); it != sysinfo.end())
+        info.modelNumber = cleanModelNumber(it->second);
+    if (auto it = sysinfo.find("pszSerialNumber"); it != sysinfo.end())
+        info.serialNumber = it->second;
+    if (auto it = sysinfo.find("visibleBuildID"); it != sysinfo.end())
+        info.firmwareVersion = cleanFirmwareVersion(it->second);
 
-        // SysInfo can be empty (common after flash mods/restores); fall back
-        // to SysInfoExtended, which also carries the FireWire GUID needed to
-        // hash DBs for 6th-gen+ devices.
-        if (info.modelNumber.empty() || info.serialNumber.empty()) {
-            const std::string xml =
-                readWholeFile(control / "Device" / "SysInfoExtended");
-            if (!xml.empty()) {
-                if (info.modelNumber.empty())
-                    info.modelNumber =
-                        cleanModelNumber(plistString(xml, "ModelNumStr"));
-                if (info.serialNumber.empty())
-                    info.serialNumber = plistString(xml, "SerialNumber");
-                info.firewireGuid = plistString(xml, "FireWireGUID");
-            }
+    if (info.modelNumber.empty() || info.serialNumber.empty()) {
+        const std::string xml =
+            readWholeFile(control / "Device" / "SysInfoExtended");
+        if (!xml.empty()) {
+            if (info.modelNumber.empty())
+                info.modelNumber =
+                    cleanModelNumber(plistString(xml, "ModelNumStr"));
+            if (info.serialNumber.empty())
+                info.serialNumber = plistString(xml, "SerialNumber");
+            info.firewireGuid = plistString(xml, "FireWireGUID");
         }
-        // Plenty of iPods have no SysInfoExtended at all — restored units,
-        // flash mods, anything whose SysInfo was written empty. The USB serial
-        // is the same value, and without it a device that signs its database
-        // can never be verified and so can never be written.
-        if (info.firewireGuid.empty())
-            info.firewireGuid = usbSerialForMount(entry.path());
-
-        info.modelName = lookupModelName(info.modelNumber);
-        info.filesystem = detectFilesystem(entry.path());
-
-        const fs::space_info space = fs::space(entry.path(), ec);
-        if (!ec) {
-            info.capacityBytes = space.capacity;
-            info.freeBytes = space.free;
-        }
-        return info;
     }
-    return std::nullopt;
+    if (info.firewireGuid.empty()) info.firewireGuid = usbSerialForMount(mount);
+
+    info.modelName = lookupModelName(info.modelNumber);
+    info.filesystem = detectFilesystem(mount);
+    const fs::space_info space = fs::space(mount, ec);
+    if (!ec) {
+        info.capacityBytes = space.capacity;
+        info.freeBytes = space.free;
+    }
+    return info;
+}
+
+}  // namespace
+
+std::vector<IpodInfo> findIpods() {
+    std::vector<IpodInfo> result;
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(kVolumesRoot, ec))
+        if (auto info = describeIpodMount(entry.path()))
+            result.push_back(std::move(*info));
+    std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+        return a.volumeName < b.volumeName;
+    });
+    return result;
+}
+
+std::optional<IpodInfo> findIpod() {
+    auto devices = findIpods();
+    if (devices.empty()) return std::nullopt;
+    return std::move(devices.front());
+}
+
+std::optional<DeviceInfo> describeFilesystemDevice(
+    const fs::path& mountPoint) {
+    std::error_code ec;
+    if (!fs::is_directory(mountPoint, ec) ||
+        fs::is_directory(mountPoint / "iPod_Control", ec))
+        return std::nullopt;
+
+    fs::path musicDirectory;
+    for (const fs::path& candidate :
+         {fs::path("MUSIC"), fs::path("Music"), fs::path("music"),
+          fs::path("Storage Media") / "Music"}) {
+        ec.clear();
+        if (fs::is_directory(mountPoint / candidate, ec)) {
+            musicDirectory = candidate;
+            break;
+        }
+    }
+    if (musicDirectory.empty()) return std::nullopt;
+
+    DeviceInfo info;
+    info.kind = DeviceKind::Filesystem;
+    info.mountPoint = mountPoint;
+    info.musicDirectory = musicDirectory;
+    info.volumeName = mountPoint.filename().string();
+
+    std::string lowerName = info.volumeName;
+    std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    info.modelName = lowerName.find("walkman") != std::string::npos
+                         ? "Sony Walkman (USB storage)"
+                         : "Filesystem media player";
+    info.filesystem = detectFilesystem(mountPoint);
+    info.writable = ::access((mountPoint / musicDirectory).c_str(), W_OK) == 0;
+    info.capabilities = {/*playlists=*/true, /*ratings=*/false,
+                         /*playCounts=*/false,
+                         /*databaseBackups=*/false};
+
+    // These are the formats PodBox can currently inspect and transfer. Sony
+    // A30/A40/A50-class players support all of them, including FLAC, so the
+    // filesystem profile does not perform the iPod-only FLAC conversion.
+    info.originalExtensions = {".mp3", ".m4a", ".m4b", ".aac", ".wav",
+                               ".aif", ".aiff", ".flac"};
+
+    const fs::space_info space = fs::space(mountPoint, ec);
+    if (!ec) {
+        info.capacityBytes = space.capacity;
+        info.freeBytes = space.free;
+    }
+    return info;
+}
+
+std::vector<DeviceInfo> findMediaDevicesAt(const fs::path& volumesRoot) {
+    std::vector<DeviceInfo> devices;
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(volumesRoot, ec))
+        if (auto ipod = describeIpodMount(entry.path()))
+            devices.push_back(std::move(*ipod));
+    std::sort(devices.begin(), devices.end(), [](const auto& a, const auto& b) {
+        return a.volumeName < b.volumeName;
+    });
+
+    std::vector<std::pair<int, DeviceInfo>> filesystemDevices;
+    ec.clear();
+    for (const auto& entry : fs::directory_iterator(volumesRoot, ec)) {
+        auto device = describeFilesystemDevice(entry.path());
+        if (!device) continue;
+        // Prefer a player we have managed before, then an explicitly named
+        // Walkman, then the conventional all-caps MUSIC layout. This avoids
+        // an unrelated external archive with a `Music` folder winning merely
+        // because directory iteration happened to return it first.
+        int score = 0;
+        std::error_code markerError;
+        if (fs::exists(entry.path() / ".podbox" /
+                           "filesystem-player.tsv",
+                       markerError))
+            score += 100;
+        if (device->modelName.find("Sony Walkman") != std::string::npos)
+            score += 50;
+        if (device->musicDirectory == fs::path("MUSIC")) score += 10;
+        filesystemDevices.emplace_back(score, std::move(*device));
+    }
+    std::sort(filesystemDevices.begin(), filesystemDevices.end(),
+              [](const auto& a, const auto& b) {
+                  if (a.first != b.first) return a.first > b.first;
+                  return a.second.volumeName < b.second.volumeName;
+              });
+    for (auto& [score, device] : filesystemDevices) {
+        (void)score;
+        devices.push_back(std::move(device));
+    }
+    return devices;
+}
+
+std::vector<DeviceInfo> findMediaDevices() {
+    return findMediaDevicesAt(kVolumesRoot);
+}
+
+std::optional<DeviceInfo> findMediaDevice() {
+    auto devices = findMediaDevices();
+    if (devices.empty()) return std::nullopt;
+    return std::move(devices.front());
 }
 
 namespace {

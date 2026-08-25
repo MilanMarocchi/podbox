@@ -5,12 +5,15 @@
 // outside it should include this.
 
 #include "ui/theme.h"
+#include "itdb/itunesdb.h"
 
 #include <imgui.h>
 
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace podbox {
 
@@ -97,5 +100,11 @@ std::string plural(int n, const char* one, const char* many);
 std::string importSummary(int added, int skipped);
 
 std::string formatTotalDuration(std::uint64_t ms);
+
+// Track IDs between two displayed rows, inclusive. The mapping is explicit
+// because sort/filter order differs from Library::tracks order.
+std::vector<std::uint32_t> displayedTrackRange(
+    const Library& library, const std::vector<std::pair<int, int>>& visible,
+    int firstRow, int lastRow);
 
 }  // namespace podbox

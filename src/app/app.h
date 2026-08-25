@@ -2,6 +2,7 @@
 
 #include "audio/player.h"
 #include "device/device_watcher.h"
+#include "device/filesystem_player.h"
 #include "itdb/itunesdb.h"
 #include "itdb/itunessd.h"
 #include "library/fingerprint_store.h"
@@ -96,6 +97,11 @@ private:
     void drawColumnBrowser(float width);
     void applyCompletedAdds();
     bool writeDatabase();
+    const DeviceInfo* activeDevice() const;
+    void activateDevice(const std::filesystem::path& mount);
+    void finishPendingDeviceCopy();
+    bool connectedIpod() const;
+    ImportTarget currentImportTarget() const;
     // True when this iPod's database can be rewritten at all. iPod classic
     // and nano 3G onwards carry a checksum over the database that PodBox
     // cannot produce until it has proven it can reproduce the one already
@@ -150,8 +156,11 @@ private:
     void createPlaylist(std::uint32_t withTrackId);
     void addToPlaylist(int playlistIndex,
                        const std::vector<std::uint32_t>& trackIds);
-    void queueFilesToIpod(const std::vector<std::filesystem::path>& files);
-    void addSelectedHostTracksToIpod();
+    void queueFilesToDevice(const std::vector<std::filesystem::path>& files);
+    void queueFilesToDevice(const std::vector<std::filesystem::path>& files,
+                            const std::filesystem::path& targetMount);
+    void addSelectedHostTracksToDevice(
+        const std::filesystem::path& targetMount);
     void trackContextMenu(const Track& t);
     bool isSelected(std::uint32_t trackId) const;
     // Applies a click's modifiers to the selection. `row` is the index into
@@ -172,10 +181,10 @@ private:
     void drawToolbar();
     void drawSidebar(float height);
     void drawMainPanel(float height);
-    void drawDeviceView(const IpodInfo& dev);
+    void drawDeviceView(const DeviceInfo& dev);
     void drawTrackTable();
     void handleTrackTableKeys();
-    void drawCapacityBar(const IpodInfo& dev);
+    void drawCapacityBar(const DeviceInfo& dev);
     void drawStatusBar();
 
     Fonts fonts_;
@@ -227,6 +236,12 @@ private:
 
     std::string libraryError_;
     std::filesystem::path loadedMount_;
+    std::optional<DeviceInfo> loadedDeviceInfo_;
+    std::filesystem::path requestedDeviceMount_;
+    std::filesystem::path pendingCopyMount_;
+    std::vector<std::filesystem::path> pendingCopyFiles_;
+    FilesystemPlayerState filesystemState_;
+    std::unordered_set<std::uint32_t> managedFilesystemTrackIds_;
     std::unordered_map<std::uint32_t, int> trackIndexById_;
 
     View view_ = View::Device;
@@ -249,6 +264,7 @@ private:
     std::vector<std::uint32_t> selection_;
     std::uint32_t selectionAnchor_ = 0;  // for shift-click ranges
     int dragSelectAnchorRow_ = -1;
+    bool dragSelectMoved_ = false;
 
     // The Genres | Artists | Albums browser above the track list.
     //
@@ -370,7 +386,7 @@ private:
     };
     ArtworkPreview art_;
 
-    bool ejectRequested_ = false;
+    std::filesystem::path ejectRequestedMount_;
 
     // Playback.
     enum class Repeat { Off, All, One };

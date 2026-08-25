@@ -33,7 +33,8 @@ bool deviceFilePresent(const fs::path& mount, const Track& track) {
 SyncPlan planSync(const HostLibrary& host, const Library& device,
                   const FingerprintStore& fingerprints,
                   const fs::path& deviceMount,
-                  const SyncOptions& options) {
+                  const SyncOptions& options,
+                  const std::unordered_set<std::uint32_t>* removableIds) {
     SyncPlan plan;
 
     // What the device actually holds, by both measures. Finder/iTunes can
@@ -109,6 +110,10 @@ SyncPlan planSync(const HostLibrary& host, const Library& device,
             if (h.fp.ok()) hostHashes.insert(h.fp.hash);
         }
         for (const Track& t : device.tracks) {
+            // A generic filesystem player may contain music managed by other
+            // applications. Mirror sync only removes files PodBox previously
+            // copied; explicit per-track deletion remains available in the UI.
+            if (removableIds && !removableIds->count(t.id)) continue;
             // Missing audio is handled unconditionally by
             // missingDeviceFiles. It cannot be a device-only copy and has no
             // bytes to free.

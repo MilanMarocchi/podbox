@@ -13,7 +13,10 @@ namespace {
 constexpr const char* kMagic = "podbox-fingerprints 1";
 
 fs::path sidecarPath(const fs::path& mount) {
-    return mount / "iPod_Control" / "iTunes" / "PodBoxFingerprints";
+    std::error_code ec;
+    const fs::path itunes = mount / "iPod_Control" / "iTunes";
+    if (fs::is_directory(itunes, ec)) return itunes / "PodBoxFingerprints";
+    return mount / ".podbox" / "fingerprints";
 }
 
 }  // namespace
@@ -49,6 +52,9 @@ bool FingerprintStore::save(const fs::path& mount) {
 
     const fs::path path = sidecarPath(mount);
     const fs::path tmp = path.string() + ".tmp";
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    if (ec) return false;
     {
         std::ofstream out(tmp, std::ios::trunc);
         if (!out) return false;
@@ -63,7 +69,6 @@ bool FingerprintStore::save(const fs::path& mount) {
         if (!out) return false;
     }
 
-    std::error_code ec;
     fs::rename(tmp, path, ec);
     if (ec) {
         fs::remove(tmp, ec);

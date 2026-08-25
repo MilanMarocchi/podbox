@@ -147,4 +147,21 @@ std::string formatTotalDuration(std::uint64_t ms) {
     return buf;
 }
 
+std::vector<std::uint32_t> displayedTrackRange(
+    const Library& library, const std::vector<std::pair<int, int>>& visible,
+    int firstRow, int lastRow) {
+    std::vector<std::uint32_t> ids;
+    if (visible.empty()) return ids;
+    int lo = std::max(0, std::min(firstRow, lastRow));
+    int hi = std::min(int(visible.size()) - 1, std::max(firstRow, lastRow));
+    if (lo > hi) return ids;
+    ids.reserve(hi - lo + 1);
+    for (int row = lo; row <= hi; ++row) {
+        const int trackIndex = visible[row].second;
+        if (trackIndex >= 0 && trackIndex < int(library.tracks.size()))
+            ids.push_back(library.tracks[trackIndex].id);
+    }
+    return ids;
+}
+
 }  // namespace podbox
