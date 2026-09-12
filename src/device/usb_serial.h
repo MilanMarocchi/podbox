@@ -1,9 +1,20 @@
 #pragma once
 
 #include <filesystem>
+#include <cstdint>
 #include <string>
 
 namespace podbox {
+
+struct UsbDeviceIdentity {
+    std::string serial;
+    std::uint16_t vendorId = 0;
+    std::uint16_t productId = 0;
+};
+
+// Identity of the USB device backing this particular volume, never another
+// attached iPod. Product/vendor IDs survive a restore that empties SysInfo.
+UsbDeviceIdentity usbIdentityForMount(const std::filesystem::path& mountPoint);
 
 // The 16-hex-digit FireWire GUID of the USB device backing `mountPoint`, taken
 // from its USB serial number, or empty when it cannot be determined.

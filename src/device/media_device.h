@@ -35,6 +35,8 @@ struct DeviceInfo {
     std::string firmwareVersion;
     std::string filesystem;
     std::string firewireGuid;  // iPod database signing only
+    std::uint16_t usbVendorId = 0;
+    std::uint16_t usbProductId = 0;
     std::uint64_t capacityBytes = 0;
     std::uint64_t freeBytes = 0;
     bool writable = true;

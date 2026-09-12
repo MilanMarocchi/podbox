@@ -31,7 +31,7 @@ std::string bsdNameForMount(const fs::path& mountPoint) {
 
 }  // namespace
 
-std::string usbSerialForMount(const fs::path& mountPoint) {
+UsbDeviceIdentity usbIdentityForMount(const fs::path& mountPoint) {
     const std::string bsdName = bsdNameForMount(mountPoint);
     if (bsdName.empty()) return {};
 
@@ -47,16 +47,35 @@ std::string usbSerialForMount(const fs::path& mountPoint) {
     // The partition knows nothing about USB; the serial lives on the USB
     // device several levels up, so walk the service plane towards the root
     // until something publishes one.
-    std::string serial;
+    UsbDeviceIdentity identity;
     io_service_t node = service;
     IOObjectRetain(node);
-    for (int depth = 0; depth < 12 && serial.empty(); ++depth) {
+    for (int depth = 0; depth < 12; ++depth) {
+        auto number = [node](CFStringRef key) -> std::uint16_t {
+            CFTypeRef value = IORegistryEntryCreateCFProperty(
+                node, key, kCFAllocatorDefault, 0);
+            int result = 0;
+            if (value) {
+                if (CFGetTypeID(value) == CFNumberGetTypeID())
+                    CFNumberGetValue(static_cast<CFNumberRef>(value),
+                                     kCFNumberIntType, &result);
+                CFRelease(value);
+            }
+            return result > 0 && result <= 0xffff ? result : 0;
+        };
+        const auto vendor = number(CFSTR("idVendor"));
+        const auto product = number(CFSTR("idProduct"));
         CFTypeRef prop = IORegistryEntryCreateCFProperty(
             node, CFSTR("USB Serial Number"), kCFAllocatorDefault, 0);
         if (prop) {
             if (CFGetTypeID(prop) == CFStringGetTypeID())
-                serial = cfStringToStd(static_cast<CFStringRef>(prop));
+                identity.serial = cfStringToStd(static_cast<CFStringRef>(prop));
             CFRelease(prop);
+        }
+        if (vendor && product) {
+            identity.vendorId = vendor;
+            identity.productId = product;
+            break;  // Do not climb into the hub and use its identity.
         }
         io_service_t parent = 0;
         if (IORegistryEntryGetParentEntry(node, kIOServicePlane, &parent) !=
@@ -67,7 +86,11 @@ std::string usbSerialForMount(const fs::path& mountPoint) {
     }
     IOObjectRelease(node);
     IOObjectRelease(service);
-    return serial;
+    return identity;
+}
+
+std::string usbSerialForMount(const fs::path& mountPoint) {
+    return usbIdentityForMount(mountPoint).serial;
 }
 
 }  // namespace podbox

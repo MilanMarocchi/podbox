@@ -211,8 +211,6 @@ std::string cleanFirmwareVersion(const std::string& value) {
 
 }  // namespace
 
-namespace {
-
 std::optional<IpodInfo> describeIpodMount(const fs::path& mount) {
     std::error_code ec;
     const fs::path control = mount / "iPod_Control";
@@ -249,10 +247,18 @@ std::optional<IpodInfo> describeIpodMount(const fs::path& mount) {
             info.firewireGuid = plistString(xml, "FireWireGUID");
         }
     }
-    if (info.firewireGuid.empty()) info.firewireGuid = usbSerialForMount(mount);
+    const auto usb = usbIdentityForMount(mount);
+    info.usbVendorId = usb.vendorId;
+    info.usbProductId = usb.productId;
+    if (info.firewireGuid.empty()) info.firewireGuid = usb.serial;
 
     info.modelName = lookupModelName(info.modelNumber);
+    if (info.modelNumber.empty() && usb.vendorId == 0x05ac &&
+        usb.productId == 0x1209)
+        info.modelName = "iPod video (5th/5.5th gen)";
     info.filesystem = detectFilesystem(mount);
+    info.writable = ::access((control / "iTunes").c_str(), W_OK) == 0 &&
+                    ::access((control / "Music").c_str(), W_OK) == 0;
     const fs::space_info space = fs::space(mount, ec);
     if (!ec) {
         info.capacityBytes = space.capacity;
@@ -261,7 +267,78 @@ std::optional<IpodInfo> describeIpodMount(const fs::path& mount) {
     return info;
 }
 
-}  // namespace
+fs::path ipodDatabasePath(const fs::path& mount) {
+    const fs::path dir = mount / "iPod_Control" / "iTunes";
+    std::error_code ec;
+    const fs::path cdb = dir / "iTunesCDB";
+    if (fs::exists(cdb, ec) && fs::file_size(cdb, ec) > 0) return cdb;
+    return dir / "iTunesDB";
+}
+
+ParseResult loadIpodLibrary(const IpodInfo& device) {
+    const fs::path dir = device.mountPoint / "iPod_Control" / "iTunes";
+    const fs::path music = device.mountPoint / "iPod_Control" / "Music";
+    // An empty, unreadable or corrupt database is still an existing database.
+    // In particular, a nano's zero-byte iTunesDB must not invite an unsigned
+    // replacement for its compressed/signed library.
+    for (const char* name : {"iTunesDB", "iTunesCDB"}) {
+        std::error_code ec;
+        const auto status = fs::symlink_status(dir / name, ec);
+        if (ec && ec != std::errc::no_such_file_or_directory)
+            return {std::nullopt, "Could not inspect this iPod's database: " +
+                                      ec.message()};
+        if (fs::exists(status)) return parseItunesDb(ipodDatabasePath(device.mountPoint));
+    }
+
+    // Apple USB 05ac:1209 identifies the video family (also documented by
+    // Rockbox's firmware/export/config/ipodvideo.h). These models use the
+    // unhashed database dialect our writer can create without an Apple seed.
+    bool video = device.usbVendorId == 0x05ac && device.usbProductId == 0x1209;
+    if (!device.modelNumber.empty()) {
+        video = false;
+        for (const char* code : {"MA002", "MA146", "MA003", "MA147",
+                                 "MA444", "MA446", "MA448", "MA450"})
+            if (device.modelNumber.rfind(code, 0) == 0) video = true;
+    }
+    if (!device.isIpod() || !video)
+        return {std::nullopt,
+                "No music database found. Set up this iPod in Finder or "
+                "iTunes once, then reconnect it to PodBox"};
+    if (!device.writable)
+        return {std::nullopt, "This iPod is mounted read-only"};
+
+    // Restore leaves empty Fxx music folders and may leave iTunesControl,
+    // which is restore metadata, not an iTunesDB. Keep it untouched. Refuse
+    // initialization when songs, backups or companion databases remain.
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec) || !fs::is_directory(music, ec))
+        return {std::nullopt, "The restored iPod's music folders are missing"};
+    fs::directory_iterator entry(dir, ec), end;
+    for (; !ec && entry != end; entry.increment(ec)) {
+        const auto name = entry->path().filename().string();
+        if (name != "iTunesControl" && name != ".DS_Store")
+            return {std::nullopt,
+                    "No music database found, but iPod database files remain. "
+                    "Restore a database backup or set up the iPod in Finder"};
+    }
+    if (ec) return {std::nullopt, "Could not inspect this iPod: " + ec.message()};
+    fs::recursive_directory_iterator song(music, ec), songsEnd;
+    for (; !ec && song != songsEnd; song.increment(ec)) {
+        const auto status = song->symlink_status(ec);
+        if (ec) break;
+        if (!fs::is_directory(status) &&
+            !(fs::is_regular_file(status) &&
+              song->path().filename() == ".DS_Store"))
+            return {std::nullopt,
+                    "No music database found, but music files remain. "
+                    "Restore a database backup before syncing"};
+    }
+    if (ec) return {std::nullopt, "Could not inspect this iPod: " + ec.message()};
+    Library library;
+    library.masterName = device.volumeName;
+    library.version = 0x19;
+    return {std::move(library), {}};
+}
 
 std::vector<IpodInfo> findIpods() {
     std::vector<IpodInfo> result;

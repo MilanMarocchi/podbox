@@ -431,6 +431,8 @@ std::vector<fs::path> App::availableBackups() const {
 
 bool App::writesSupported() const {
     if (!library_) return false;
+    if (const DeviceInfo* device = activeDevice(); !device || !device->writable)
+        return false;
     if (!connectedIpod()) {
         const DeviceInfo* device = activeDevice();
         return device && device->writable;
@@ -447,6 +449,8 @@ bool App::writesSupported() const {
 
 std::string App::writeBlockReason() const {
     if (!connectedIpod()) return "This player's music folder is read-only";
+    if (const DeviceInfo* device = activeDevice(); device && !device->writable)
+        return "This iPod is mounted read-only";
     if (itunesSdKind_ == ItunesSdKind::Legacy)
         return "This older iPod shuffle uses an unsupported database format";
     if (library_ && library_->hashingScheme == kChecksumHashAB)
@@ -459,11 +463,7 @@ std::filesystem::path App::dbFilePath() const {
     // Nano 5G and later keep a zero-byte iTunesDB and the real library as a
     // compressed iTunesCDB. Which one has content is the reliable tell: Apple
     // never leaves both populated.
-    const fs::path dir = loadedMount_ / "iPod_Control" / "iTunes";
-    std::error_code ec;
-    const fs::path cdb = dir / "iTunesCDB";
-    if (fs::exists(cdb, ec) && fs::file_size(cdb, ec) > 0) return cdb;
-    return dir / "iTunesDB";
+    return ipodDatabasePath(loadedMount_);
 }
 
 void App::verifyChecksum() {
@@ -1134,7 +1134,7 @@ void App::updateLibrary() {
     if (dev->isIpod()) {
         itunesSdKind_ = detectItunesSd(
             loadedMount_ / "iPod_Control" / "iTunes" / "iTunesSD");
-        ParseResult res = parseItunesDb(dbFilePath());
+        ParseResult res = loadIpodLibrary(*dev);
         library_ = std::move(res.library);
         libraryError_ = res.error;
         if (library_ && itunesSdKind_ == ItunesSdKind::Modern)

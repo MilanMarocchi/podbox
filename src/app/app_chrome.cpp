@@ -1015,9 +1015,7 @@ void App::drawDeviceView(const DeviceInfo& dev) {
                            "will be changed.");
     else if (dev.isIpod() && !writesSupported())
         ImGui::TextColored(v4(pal::Warning),
-                           "This iPod's database carries a checksum PodBox "
-                           "cannot produce yet, so it is read-only here. "
-                           "Nothing on the device will be changed.");
+                           "%s", writeBlockReason().c_str());
     else if (dev.isIpod() && appleMusicSyncing())
         ImGui::TextColored(v4(pal::Warning),
                            "Apple Music is syncing this iPod right now — "

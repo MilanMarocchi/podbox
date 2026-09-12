@@ -200,6 +200,15 @@ automatically on macOS; a Mac-formatted (HFS+) iPod works too. If your iPod
 only appears in Finder's device sync view, enable "disk use" once (or boot it
 into disk mode with Select+Play) so it mounts as a volume.
 
+**Freshly restored iPod video (5th/5.5th generation):** PodBox can start a
+new library on either HFS+ or FAT32, even when the restore leaves `SysInfo`
+empty and no `iTunesDB`. On macOS it identifies the model through USB; a
+known video model in `SysInfo` also works. Import or sync music normally:
+the first change creates the music database. Restore metadata in
+`iTunesControl` is preserved. Existing database files, backups or leftover
+music prevent automatic initialization. Other models without a database
+must be set up in Finder/iTunes once before reconnecting to PodBox.
+
 ## Coexisting with Apple Music
 
 PodBox is careful to share an iPod with Music.app rather than take it over.

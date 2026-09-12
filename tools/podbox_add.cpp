@@ -3,6 +3,7 @@
 // before any audio is copied; signed devices are never written on guesswork.
 //   podbox_add <mount> [--guid <16-hex>] [--alac|--mp3] <file>...
 #include "device/usb_serial.h"
+#include "device/ipod_device.h"
 #include "itdb/hash58.h"
 #include "itdb/hash72.h"
 #include "itdb/hashab.h"
@@ -75,12 +76,7 @@ std::string plistString(const std::string &xml, const std::string &key) {
 }
 
 fs::path databasePath(const fs::path &mount) {
-    const fs::path dir = mount / "iPod_Control" / "iTunes";
-    const fs::path cdb = dir / "iTunesCDB";
-    std::error_code ec;
-    if (fs::exists(cdb, ec) && fs::file_size(cdb, ec) > 0)
-        return cdb;
-    return dir / "iTunesDB";
+    return podbox::ipodDatabasePath(mount);
 }
 
 Bytes guidForMount(const fs::path &mount, const std::string &overrideGuid) {
@@ -396,7 +392,9 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    podbox::ParseResult result = podbox::parseItunesDb(dbPath);
+    const auto device = podbox::describeIpodMount(mount);
+    podbox::ParseResult result = device ? podbox::loadIpodLibrary(*device)
+                                      : podbox::parseItunesDb(dbPath);
     if (!result.library) {
         std::fprintf(stderr, "error: %s\n", result.error.c_str());
         return 1;
