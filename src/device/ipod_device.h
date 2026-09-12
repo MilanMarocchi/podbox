@@ -20,4 +20,7 @@ std::filesystem::path ipodDatabasePath(const std::filesystem::path& mount);
 // the database through the normal transaction. Never replaces corrupt data.
 ParseResult loadIpodLibrary(const IpodInfo& device);
 
+// Model evidence required before creating an unsigned replacement database.
+bool isIpodVideo(const IpodInfo& device);
+
 }  // namespace podbox

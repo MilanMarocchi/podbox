@@ -921,6 +921,96 @@ void App::drawDuplicatesModal() {
     aqua::endSheet();
 }
 
+void App::openRecovery() {
+    if (recovery_.running || sync_.busy()) return;
+    const auto* device = activeDevice();
+    if (!device || !device->isIpod()) return;
+    if (recovery_.thread.joinable()) recovery_.thread.join();
+    recovery_.result = {};
+    recovery_.mount = device->mountPoint;
+    recovery_.cancel.store(false);
+    recovery_.finished.store(false);
+    recovery_.open = true;
+    recovery_.running = true;
+    recovery_.thread = std::thread([this, device = *device] {
+        recovery_.result = scanIpodRecovery(device, &recovery_.cancel);
+        recovery_.finished.store(true);
+    });
+}
+
+void App::drawRecoveryModal() {
+    if (recovery_.running && recovery_.finished.load()) {
+        recovery_.thread.join();
+        recovery_.running = false;
+    }
+    if (!recovery_.open) return;
+    if (!ImGui::IsPopupOpen("Recover Music")) ImGui::OpenPopup("Recover Music");
+    if (!aqua::beginSheet("Recover Music", 610.0f)) return;
+    aqua::heading(fonts_, "Recover the music already on your iPod");
+    aqua::body(fonts_, "Rebuild the song list from the files on this iPod. Audio files stay where they are and are never deleted or retagged.");
+    aqua::divider();
+    const bool connected = watcher_.find(recovery_.mount) && loadedMount_ == recovery_.mount;
+    if (!connected) {
+        ImGui::TextWrapped("This iPod disconnected or the selected player changed. Reconnect and scan again.");
+        recovery_.cancel.store(true);
+    } else if (recovery_.running) {
+        ImGui::TextUnformatted("Scanning music files…");
+    } else if (!recovery_.result.error.empty()) {
+        ImGui::TextWrapped("%s", recovery_.result.error.c_str());
+    } else {
+        const auto& result = recovery_.result;
+        ImGui::Text("%zu songs can be recovered (%s)", result.library.tracks.size(),
+                    formatBytes(result.musicBytes).c_str());
+        if (!availableBackups().empty())
+            ImGui::TextWrapped("A database backup is available. Restore Backup can also recover playlists and listening history; try it first.");
+        aqua::body(fonts_, "Titles, artists and albums come from the files' tags. Playlists, ratings and play counts cannot be reconstructed from audio. Any damaged database and old play counts are kept in a recovery archive on the iPod.");
+        if (!result.skipped.empty()) {
+            ImGui::TextWrapped("%zu files could not be indexed. They will stay on the iPod unchanged.", result.skipped.size());
+            if (ImGui::TreeNode("Files that will be left unlisted")) {
+                ImGui::BeginChild("skipped_recovery", ImVec2(0, 90), true);
+                for (const auto& message : result.skipped) ImGui::TextWrapped("%s", message.c_str());
+                ImGui::EndChild();
+                ImGui::TreePop();
+            }
+        }
+        if (ImGui::TreeNode("Preview recovered songs")) {
+            ImGui::BeginChild("recovered_songs", ImVec2(0, 120), true);
+            for (const Track& track : result.library.tracks)
+                ImGui::TextWrapped("%s — %s", track.artist.c_str(), track.title.c_str());
+            ImGui::EndChild();
+            ImGui::TreePop();
+        }
+    }
+    aqua::divider();
+    const bool ready = connected && !recovery_.running && recovery_.result.error.empty() &&
+                       !recovery_.result.library.tracks.empty() && !sync_.busy() && !appleMusicSyncing();
+    ImGui::BeginDisabled(!ready);
+    const bool rebuild = aqua::button("Rebuild Song Database", ImVec2(190, 0));
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (aqua::button("Cancel", ImVec2(92, 0))) {
+        recovery_.cancel.store(true);
+        recovery_.open = false;
+        ImGui::CloseCurrentPopup();
+    }
+    if (rebuild) {
+        fs::path archive;
+        std::string error;
+        if (installIpodRecovery(recovery_.result, &archive, &error)) {
+            const auto count = recovery_.result.library.tracks.size();
+            recovery_.open = false;
+            ImGui::CloseCurrentPopup();
+            loadedMount_.clear();
+            updateLibrary();
+            setStatus("Recovered " + std::to_string(count) + " songs. The iPod is ready to sync.");
+        } else {
+            recovery_.result.error = error;
+            setStatus("Recovery failed: " + error);
+        }
+    }
+    aqua::endSheet();
+}
+
 void App::drawRestoreModal() {
     if (!restoreOpen_) return;
     if (!ImGui::IsPopupOpen("Restore Database"))
@@ -980,7 +1070,7 @@ void App::drawRestoreModal() {
     // checksum, replacing the current DB with an older PodBox-written one is
     // just as unreadable. (A backup taken by iTunes would be fine, but we
     // cannot tell the two apart, and guessing wrong bricks the library.)
-    if (!writesSupported()) {
+    if (!restoreSupported()) {
         setStatus(writeBlockReason());
         return;
     }
@@ -1023,6 +1113,14 @@ void App::drawRestoreModal() {
         if (!fs::is_directory(chosenSqlite, ec)) {
             restoreOpen_ = false;
             setStatus("This backup has no matching nano SQLite bundle");
+            return;
+        }
+    }
+    if (!library_) {
+        const auto candidate = parseItunesDb(chosen);
+        if (!candidate.library || candidate.library->hashingScheme != kChecksumNone ||
+            candidate.library->compressed) {
+            setStatus("This backup is not a usable unsigned iPod video database");
             return;
         }
     }
@@ -1088,7 +1186,7 @@ void App::drawRestoreModal() {
         rotateBackups(sdPath);
         rotateBackups(statsPath);
     }
-    fs::copy_file(restoreTmp, dbPath, fs::copy_options::overwrite_existing, ec);
+    fs::rename(restoreTmp, dbPath, ec);
     const std::error_code dbRestoreError = ec;
     std::error_code cleanup;
     fs::remove(restoreTmp, cleanup);

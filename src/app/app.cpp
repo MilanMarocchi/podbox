@@ -49,8 +49,19 @@ namespace podbox {
 
 App::~App() {
     apple_.cancel.store(true);
+    recovery_.cancel.store(true);
+    if (recovery_.thread.joinable()) recovery_.thread.join();
     if (scan_.thread.joinable()) scan_.thread.join();
     if (apple_.thread.joinable()) apple_.thread.join();
+}
+
+bool App::prepareToClose() {
+    if (closeWithoutSaving_) return true;
+    sync_.stopAndWait();
+    batchWriteFailed_ = false;
+    applyCompletedAdds();
+    closeSaveFailedOpen_ = pendingDbWrite_;
+    return !pendingDbWrite_;
 }
 
 void App::frame() {
@@ -102,6 +113,26 @@ void App::frame() {
     drawDeletePlaylistModal();
     drawDuplicatesModal();
     drawRestoreModal();
+    drawRecoveryModal();
+    if (closeSaveFailedOpen_) {
+        if (!ImGui::IsPopupOpen("Songs Have Not Been Saved"))
+            ImGui::OpenPopup("Songs Have Not Been Saved");
+        if (aqua::beginSheet("Songs Have Not Been Saved", 550.0f)) {
+            aqua::heading(fonts_, "The copied songs still need a database save");
+            aqua::body(fonts_, "PodBox could not save the song list. Keep the player connected and use Retry Saving Database. Quitting now leaves the copied files on the player, but they may not appear in its music library.");
+            if (aqua::button("Keep PodBox Open", ImVec2(170, 0))) {
+                closeSaveFailedOpen_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (aqua::button("Quit Without Saving", ImVec2(170, 0))) {
+                closeWithoutSaving_ = true;
+                closeSaveFailedOpen_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            aqua::endSheet();
+        }
+    }
     drawFoldersModal();
     drawAppleMusicModal();
     drawSyncModal();
@@ -149,14 +180,16 @@ void App::activateDevice(const fs::path& mount) {
         switchSource(View::Device);
         return;
     }
-    if (sync_.busy()) {
-        setStatus("Wait for the current device copy to finish");
+    if (sync_.busy() || pendingDbWrite_) {
+        setStatus("Wait for the copy and database save to finish");
         return;
     }
     plEdit_ = {};
     syncUi_.open = false;
     dupes_.open = false;
     restoreOpen_ = false;
+    recovery_.open = false;
+    recovery_.cancel.store(true);
     getInfo_.open = false;
     requestedDeviceMount_ = mount;
     switchSource(View::Device);
@@ -216,6 +249,10 @@ void App::queueFilesToDevice(const std::vector<fs::path>& files) {
         setStatus(writeBlockReason());
         return;
     }
+    if (batchWriteFailed_) {
+        setStatus("Retry saving the database before copying more songs");
+        return;
+    }
     if (files.empty()) return;
 
     // Snapshot what is already here for the worker to check against. Building
@@ -244,8 +281,8 @@ void App::queueFilesToDevice(const std::vector<fs::path>& files,
         queueFilesToDevice(files);
         return;
     }
-    if (sync_.busy()) {
-        setStatus("Wait for the current device copy to finish");
+    if (sync_.busy() || pendingDbWrite_) {
+        setStatus("Wait for the copy and database save to finish");
         return;
     }
     pendingCopyMount_ = targetMount;
@@ -328,12 +365,17 @@ void App::applyCompletedAdds() {
         pendingDbWrite_ = true;
         visibleDirty_ = true;
     }
-    if (pendingDbWrite_ && !sync_.busy()) {
-        pendingDbWrite_ = false;
+    if (pendingDbWrite_ && !batchWriteFailed_ && !sync_.busy()) {
         const bool wrote = lastBatchAdded_ > 0 ? writeDatabase() : true;
-        if (wrote) setStatus(importSummary(lastBatchAdded_, lastBatchSkipped_));
-        lastBatchAdded_ = 0;
-        lastBatchSkipped_ = 0;
+        if (wrote) {
+            pendingDbWrite_ = false;
+            setStatus(importSummary(lastBatchAdded_, lastBatchSkipped_));
+            lastBatchAdded_ = 0;
+            lastBatchSkipped_ = 0;
+        } else {
+            batchWriteFailed_ = true;
+            switchSource(View::Device);
+        }
     }
 }
 
@@ -396,6 +438,13 @@ std::vector<fs::path> App::availableBackups() const {
                                               hashAbUuid_, hashAbNonce_,
                                               &error);
         }
+        if (!library_) {
+            const auto* device = activeDevice();
+            const auto backup = parseItunesDb(candidate);
+            return device && ipodRecoveryBlockReason(*device).empty() &&
+                   backup.library && backup.library->hashingScheme == kChecksumNone &&
+                   !backup.library->compressed;
+        }
         if (itunesSdKind_ != ItunesSdKind::Modern) return true;
         const fs::path sd =
             loadedMount_ / "iPod_Control" / "iTunes" /
@@ -426,6 +475,13 @@ std::vector<fs::path> App::availableBackups() const {
         if (fs::exists(p, ec) && usable(p)) out.push_back(p);
     }
     if (fs::exists(legacy, ec) && usable(legacy)) out.push_back(legacy);
+    fs::directory_iterator entry(dbPath.parent_path(), ec), end;
+    for (; !ec && entry != end; entry.increment(ec)) {
+        const auto p = entry->path();
+        if (p.filename().string().rfind("iTunesDB.podbox-recovered.", 0) == 0 &&
+            fs::is_regular_file(entry->symlink_status(ec)) && usable(p))
+            out.push_back(p);
+    }
     return out;
 }
 
@@ -447,10 +503,18 @@ bool App::writesSupported() const {
     return false;
 }
 
+bool App::restoreSupported() const {
+    if (sync_.busy() || pendingDbWrite_) return false;
+    if (writesSupported()) return true;
+    const auto* device = activeDevice();
+    return !library_ && device && ipodRecoveryBlockReason(*device).empty();
+}
+
 std::string App::writeBlockReason() const {
     if (!connectedIpod()) return "This player's music folder is read-only";
     if (const DeviceInfo* device = activeDevice(); device && !device->writable)
         return "This iPod is mounted read-only";
+    if (!library_) return libraryError_.empty() ? "The iPod music database could not be loaded" : libraryError_;
     if (itunesSdKind_ == ItunesSdKind::Legacy)
         return "This older iPod shuffle uses an unsupported database format";
     if (library_ && library_->hashingScheme == kChecksumHashAB)
@@ -1127,6 +1191,9 @@ void App::updateLibrary() {
     refreshPlaylistVoiceOver_.clear();
     removedPlaylistVoiceOver_.clear();
     ownWriteTime_ = {};
+    pendingDbWrite_ = false;
+    batchWriteFailed_ = false;
+    lastBatchAdded_ = lastBatchSkipped_ = 0;
     loadedMount_ = dev->mountPoint;
     loadedDeviceInfo_ = *dev;
     filesystemState_ = {};

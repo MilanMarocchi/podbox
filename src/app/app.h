@@ -2,6 +2,7 @@
 
 #include "audio/player.h"
 #include "device/device_watcher.h"
+#include "device/ipod_recovery.h"
 #include "device/filesystem_player.h"
 #include "itdb/itunesdb.h"
 #include "itdb/itunessd.h"
@@ -39,6 +40,9 @@ public:
 
     // Draws one frame of the UI. Call between ImGui NewFrame/Render.
     void frame();
+    // Called before UI teardown; returns false if copied songs remain unsaved.
+    bool prepareToClose();
+    bool closeWithoutSaving() const { return closeWithoutSaving_; }
 
     // The window, so dragging the toolbar can move it. The toolbar occupies
     // the title bar, so there is nothing else left to grab.
@@ -126,7 +130,10 @@ private:
     bool appleMusicSyncing() const;
     void rotateBackups(const std::filesystem::path& dbPath);
     std::vector<std::filesystem::path> availableBackups() const;
+    bool restoreSupported() const;
     void drawRestoreModal();
+    void openRecovery();
+    void drawRecoveryModal();
     void drawFoldersModal();
     void drawGetInfoModal();
     void openGetInfo();
@@ -290,6 +297,9 @@ private:
     FingerprintStore fingerprints_;
     bool skipDuplicates_ = true;
     bool pendingDbWrite_ = false;
+    bool batchWriteFailed_ = false;
+    bool closeSaveFailedOpen_ = false;
+    bool closeWithoutSaving_ = false;
     int lastBatchAdded_ = 0;
     int lastBatchSkipped_ = 0;
     std::uint32_t nextTrackId_ = 100;
@@ -301,6 +311,15 @@ private:
     // means somebody else touched it.
     std::filesystem::file_time_type ownWriteTime_{};
     bool restoreOpen_ = false;
+    struct RecoveryUi {
+        bool open = false;
+        bool running = false;
+        std::atomic<bool> finished{false};
+        std::atomic<bool> cancel{false};
+        std::thread thread;
+        IpodRecovery result;
+        std::filesystem::path mount;
+    } recovery_;
     bool foldersOpen_ = false;
 
     // Get Info. Editing many tracks at once leaves any field the user does

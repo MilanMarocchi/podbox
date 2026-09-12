@@ -275,6 +275,17 @@ fs::path ipodDatabasePath(const fs::path& mount) {
     return dir / "iTunesDB";
 }
 
+bool isIpodVideo(const IpodInfo& device) {
+    bool video = device.usbVendorId == 0x05ac && device.usbProductId == 0x1209;
+    if (!device.modelNumber.empty()) {
+        video = false;
+        for (const char* code : {"MA002", "MA146", "MA003", "MA147",
+                                 "MA444", "MA446", "MA448", "MA450"})
+            if (device.modelNumber.rfind(code, 0) == 0) video = true;
+    }
+    return device.isIpod() && video;
+}
+
 ParseResult loadIpodLibrary(const IpodInfo& device) {
     const fs::path dir = device.mountPoint / "iPod_Control" / "iTunes";
     const fs::path music = device.mountPoint / "iPod_Control" / "Music";
@@ -293,14 +304,7 @@ ParseResult loadIpodLibrary(const IpodInfo& device) {
     // Apple USB 05ac:1209 identifies the video family (also documented by
     // Rockbox's firmware/export/config/ipodvideo.h). These models use the
     // unhashed database dialect our writer can create without an Apple seed.
-    bool video = device.usbVendorId == 0x05ac && device.usbProductId == 0x1209;
-    if (!device.modelNumber.empty()) {
-        video = false;
-        for (const char* code : {"MA002", "MA146", "MA003", "MA147",
-                                 "MA444", "MA446", "MA448", "MA450"})
-            if (device.modelNumber.rfind(code, 0) == 0) video = true;
-    }
-    if (!device.isIpod() || !video)
+    if (!isIpodVideo(device))
         return {std::nullopt,
                 "No music database found. Set up this iPod in Finder or "
                 "iTunes once, then reconnect it to PodBox"};
@@ -331,7 +335,8 @@ ParseResult loadIpodLibrary(const IpodInfo& device) {
               song->path().filename() == ".DS_Store"))
             return {std::nullopt,
                     "No music database found, but music files remain. "
-                    "Restore a database backup before syncing"};
+                    "Use Recover Music to rebuild the song list, or restore "
+                    "a database backup before syncing"};
     }
     if (ec) return {std::nullopt, "Could not inspect this iPod: " + ec.message()};
     Library library;

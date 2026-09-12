@@ -51,13 +51,17 @@ fs::path allocateMusicPath(const fs::path& mount, const std::string& extension,
     return {};
 }
 
-SyncEngine::~SyncEngine() {
+SyncEngine::~SyncEngine() { stopAndWait(); }
+
+void SyncEngine::stopAndWait() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stop_ = true;
+        pending_.clear();
     }
     cv_.notify_all();
     if (worker_.joinable()) worker_.join();
+    working_.store(false);
 }
 
 void SyncEngine::queueAdds(const std::vector<fs::path>& files,
@@ -66,6 +70,7 @@ void SyncEngine::queueAdds(const std::vector<fs::path>& files,
     if (files.empty()) return;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        stop_ = false;
         target_ = std::move(target);
         importFmt_ = fmt;
         guard_ = std::move(guard);

@@ -209,6 +209,27 @@ the first change creates the music database. Restore metadata in
 music prevent automatic initialization. Other models without a database
 must be set up in Finder/iTunes once before reconnecting to PodBox.
 
+### Recovering a missing or damaged song database
+
+If an iPod video (5th/5.5th generation) still has music files but its database
+is missing or unreadable, select the iPod under **Devices → Recover Music…**.
+PodBox scans the existing audio in the background and previews the recoverable
+songs and any files it cannot read. **Rebuild Song Database** creates a new
+index pointing at those same files; no audio is copied, removed or retagged.
+
+Tags recover titles, artists and albums. Playlists, ratings and play counts
+need an intact database backup: **Restore Backup…** remains available on these
+models even when the live database cannot load. Rebuilding archives a damaged
+original and old positional play counts under `iPod_Control/iTunes/PodBox
+Recovery <id>/`, and keeps `iTunesDB.podbox-recovered.<id>` available in the
+normal restore list. Other models still require their verified database and
+companion files; recovery never bypasses signature checks.
+
+A failed import database save now remains visible with **Retry Saving
+Database**. Closing PodBox stops queued copies, finishes the current file and
+saves completed copies before exiting; if saving fails, PodBox lets you stay
+open to retry or explicitly quit with the files still unlisted.
+
 ## Coexisting with Apple Music
 
 PodBox is careful to share an iPod with Music.app rather than take it over.

@@ -554,7 +554,7 @@ void App::drawSidebar(float height) {
         const ImVec2 afterRow = ImGui::GetCursorScreenPos();
         ImGui::SetCursorScreenPos(
             ImVec2(iconPos.x + kSidebarWidth - 32.0f, iconPos.y));
-        ImGui::BeginDisabled(active && sync_.busy());
+        ImGui::BeginDisabled(active && (sync_.busy() || pendingDbWrite_));
         if (ImGui::InvisibleButton("##eject", ImVec2(26.0f, 18.0f)))
             ejectRequestedMount_ = dev.mountPoint;
         ImGui::EndDisabled();
@@ -901,6 +901,18 @@ void App::drawDeviceView(const DeviceInfo& dev) {
         ImGui::EndTable();
     }
 
+    if (dev.isIpod() && !library_) {
+        ImGui::Dummy(ImVec2(0, 8));
+        ImGui::TextWrapped("The song database could not be loaded. Music files may still be on this iPod.");
+        ImGui::BeginDisabled(sync_.busy() || recovery_.running);
+        if (ImGui::Button("Recover Music…")) openRecovery();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!restoreSupported());
+        if (ImGui::Button("Restore Backup…")) restoreOpen_ = true;
+        ImGui::EndDisabled();
+    }
+
     ImGui::Dummy(ImVec2(0, 10));
     ImGui::PushFont(fonts_.uiBold);
     ImGui::TextUnformatted("Capacity");
@@ -937,12 +949,20 @@ void App::drawDeviceView(const DeviceInfo& dev) {
             "Artist/Album folders. This profile keeps FLAC original.");
     ImGui::PopFont();
 
+    if (batchWriteFailed_) {
+        ImGui::Dummy(ImVec2(0, 8));
+        ImGui::TextWrapped("Songs were copied, but the song database could not be saved. Keep the player connected and retry before ejecting.");
+        if (ImGui::Button("Retry Saving Database")) {
+            batchWriteFailed_ = false;
+            applyCompletedAdds();
+        }
+    }
     ImGui::Dummy(ImVec2(0, 14));
     ImGui::PushFont(fonts_.uiBold);
     ImGui::TextUnformatted("Sync");
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(0, 2));
-    ImGui::BeginDisabled(host_.tracks().empty() || sync_.busy() ||
+    ImGui::BeginDisabled(host_.tracks().empty() || sync_.busy() || pendingDbWrite_ ||
                          !writesSupported());
     if (ImGui::Button(dev.isIpod() ? "Sync Library to iPod…"
                                    : "Sync Library to Player…")) {
@@ -996,7 +1016,7 @@ void App::drawDeviceView(const DeviceInfo& dev) {
             "Mirror sync only removes files previously copied by PodBox. "
             "Other files on this player are left alone.");
     } else {
-        ImGui::BeginDisabled(!writesSupported());
+        ImGui::BeginDisabled(!restoreSupported());
         if (ImGui::Button("Restore Database…")) restoreOpen_ = true;
         ImGui::EndDisabled();
     }

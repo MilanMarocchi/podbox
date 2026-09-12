@@ -138,6 +138,7 @@ add_library(podbox_core STATIC
   src/device/device_watcher.cpp
   src/device/filesystem_player.cpp
   src/device/ipod_device.cpp
+  src/device/ipod_recovery.cpp
   $<IF:$<BOOL:${APPLE}>,src/device/usb_serial_mac.cpp,src/device/usb_serial_stub.cpp>
   src/itdb/hash58.cpp
   src/itdb/hash72.cpp
@@ -262,6 +263,9 @@ target_link_libraries(sync_test PRIVATE podbox_core)
 add_executable(filesystem_player_test tools/filesystem_player_test.cpp)
 target_link_libraries(filesystem_player_test PRIVATE podbox_core)
 
+add_executable(ipod_recovery_test tools/ipod_recovery_test.cpp)
+target_link_libraries(ipod_recovery_test PRIVATE podbox_core)
+
 add_executable(ipod_device_test tools/ipod_device_test.cpp)
 target_link_libraries(ipod_device_test PRIVATE podbox_core)
 
@@ -336,6 +340,7 @@ enable_testing()
 add_test(NAME dedupe COMMAND dedupe_test)
 add_test(NAME sync COMMAND sync_test --self-test)
 add_test(NAME filesystem_player COMMAND filesystem_player_test)
+add_test(NAME ipod_recovery COMMAND ipod_recovery_test)
 add_test(NAME ipod_device COMMAND ipod_device_test)
 add_test(NAME ui COMMAND ui_test)
 add_test(NAME hash58 COMMAND hash58_test)

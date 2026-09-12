@@ -335,6 +335,11 @@ bool writeItunesDb(const Library& lib, const fs::path& path,
         if (error) *error = "Could not write " + path.string();
         return false;
     }
+    file.close();
+    if (!file) {
+        if (error) *error = "Could not finish writing " + path.string();
+        return false;
+    }
     return true;
 }
 

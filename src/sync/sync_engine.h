@@ -53,6 +53,8 @@ struct ImportTarget {
 class SyncEngine {
 public:
     ~SyncEngine();
+    // Stop queued copies, join the current copy, retain completed metadata.
+    void stopAndWait();
 
     struct Completed {
         Track track;        // filled when error is empty and !duplicate

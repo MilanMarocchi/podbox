@@ -69,7 +69,11 @@ int main() {
         a->onFilesDropped(std::vector<std::string>(paths, paths + count));
     });
 
-    while (!glfwWindowShouldClose(window)) {
+    for (;;) {
+        if (glfwWindowShouldClose(window) || app.closeWithoutSaving()) {
+            if (app.prepareToClose()) break;
+            glfwSetWindowShouldClose(window, GLFW_FALSE);
+        }
         // Render continuously (capped by vsync) while focused so the UI feels
         // responsive; idle on events when in the background to save power.
         // Either way we wake at least a few times a second so the device
