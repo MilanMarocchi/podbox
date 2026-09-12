@@ -53,12 +53,17 @@ fs::path allocateMusicPath(const fs::path& mount, const std::string& extension,
 
 SyncEngine::~SyncEngine() { stopAndWait(); }
 
-void SyncEngine::stopAndWait() {
+void SyncEngine::requestStop() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        stop_ = true;
         pending_.clear();
     }
+    cv_.notify_all();
+}
+
+void SyncEngine::stopAndWait() {
+    requestStop();
+    { std::lock_guard<std::mutex> lock(mutex_); stop_ = true; }
     cv_.notify_all();
     if (worker_.joinable()) worker_.join();
     working_.store(false);

@@ -221,30 +221,41 @@ this code.
 
 **One rule: workers own copies; the UI thread owns all mutation.**
 
-Three things run off the UI thread — the folder rescan, the sync/import copier
-(`SyncEngine`), and the fingerprint verifier (`VerifyJob`). Each is handed an
-immutable copy of what it needs, produces results into its own buffer, and sets
-an atomic flag. The UI thread polls a `take*()` method each frame and is the
-only place that mutates `library_`, `host_`, or anything on disk.
+Device discovery, library loading, checksum verification, database saves,
+restore/recovery installation, eject, folder walks, artwork decoding, tag
+writes, backup validation, and sync/duplicate review run on workers. Local
+library scans and Apple Music copying/indexing also run off the UI thread.
+`BackgroundJob<T>` owns a single asynchronous operation and polls readiness
+without waiting. Existing scan/copy/verifier workers use completion flags.
+Workers never call ImGui or OpenGL; artwork texture uploads and result
+installation happen on the UI thread.
 
-This is why there are no locks around the library, and why a cold scan of a
-large folder does not stall the frame loop. If you add background work, follow
-the same shape: copy in, results out, no shared mutable state.
+`DeviceSession` holds copyable device-library state and the synchronous disk
+operations used by workers. `App::writeDatabase()` queues a snapshot save;
+its return value means **accepted**, not persisted. `applyDeviceJob()` clears
+pending changes only after success. Failures retain the dirty state for retry
+and prevent eject. Device mutations are disabled while a device job runs.
 
-`App::writeDatabase()` is the historical name of the single commit funnel for
-every device-library mutation. For iPods its guards cover the hashing scheme,
-Apple Music mid-sync interlock, backup rotation and atomic database install.
-For filesystem players it commits changed M3U8 files and the managed-file
-manifest. Both paths keep the fingerprint sidecar in step. Add a mutation and
-you get all of that for free — do not commit device state any other way.
+Eject captures the requested mount and runs the system command on a worker.
+The library is cleared only after success. Discovery suppresses results from
+an in-flight scan for a volume that was just ejected. Closing signals copy
+cancellation and continues the frame loop until outstanding work and saves
+finish; it never joins an active copy or eject command in the close callback.
+
+For iPods, the save guards cover the hashing scheme, Apple Music mid-sync
+interlock, backup rotation and database installation. Filesystem players
+commit tags, changed M3U8 files and the managed-file manifest. Both paths keep
+the fingerprint sidecar in step. Workers own their snapshots; only completion
+handlers mutate the UI's live library state.
 
 ## `app/`
 
-Four files, split by what each has a reason to change for:
+Five files, split by what each has a reason to change for:
 
 | File | Holds |
 |---|---|
 | `app.cpp` | lifecycle, the frame loop, library loading, every mutation path, selection, playback |
+| `app_background.cpp` | background result polling, local persistence, cached disk checks |
 | `app_chrome.cpp` | toolbar, transport, source list, column browser, track table, device pane, status bar |
 | `app_modals.cpp` | the eight sheets and the work each drives |
 | `app_util.{h,cpp}` | layout constants, and the drawing and text helpers the other three share |

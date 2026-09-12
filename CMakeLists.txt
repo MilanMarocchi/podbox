@@ -136,6 +136,7 @@ set(TAGLIB_INCLUDES
 
 add_library(podbox_core STATIC
   src/device/device_watcher.cpp
+  src/device/device_session.cpp
   src/device/filesystem_player.cpp
   src/device/ipod_device.cpp
   src/device/ipod_recovery.cpp
@@ -206,6 +207,7 @@ set(PODBOX_ICON ${CMAKE_CURRENT_SOURCE_DIR}/packaging/PodBox.icns)
 add_executable(podbox MACOSX_BUNDLE
   src/main.cpp
   src/app/app.cpp
+  src/app/app_background.cpp
   src/app/app_chrome.cpp
   src/app/app_modals.cpp
   src/app/app_util.cpp
@@ -274,6 +276,14 @@ target_link_libraries(ipod_device_test PRIVATE podbox_core)
 add_executable(ui_test tools/ui_test.cpp src/app/app_util.cpp)
 target_link_libraries(ui_test PRIVATE podbox_core imgui_lib)
 
+# Headless app regression tests use the null audio/window backends and never
+# invoke the system eject command or touch a connected device.
+add_executable(background_test tools/background_test.cpp
+  src/app/app.cpp src/app/app_background.cpp src/app/app_chrome.cpp
+  src/app/app_modals.cpp src/app/app_util.cpp src/ui/aqua.cpp src/ui/theme.cpp
+  src/audio/player_null.cpp src/ui/macos_window_stub.cpp)
+target_link_libraries(background_test PRIVATE podbox_core imgui_lib)
+
 add_executable(hash58_test tools/hash58_test.cpp)
 target_link_libraries(hash58_test PRIVATE podbox_core)
 
@@ -301,9 +311,11 @@ endif()
 
 if(APPLE)
   target_link_libraries(podbox PRIVATE "-framework OpenGL")
+  target_link_libraries(background_test PRIVATE "-framework OpenGL")
 elseif(UNIX)
   find_package(OpenGL REQUIRED)
   target_link_libraries(podbox PRIVATE OpenGL::GL)
+  target_link_libraries(background_test PRIVATE OpenGL::GL)
 endif()
 
 # Installation. A .app goes to Applications/ so `nix profile install` and
@@ -343,6 +355,8 @@ add_test(NAME filesystem_player COMMAND filesystem_player_test)
 add_test(NAME ipod_recovery COMMAND ipod_recovery_test)
 add_test(NAME ipod_device COMMAND ipod_device_test)
 add_test(NAME ui COMMAND ui_test)
+add_test(NAME background COMMAND background_test)
+set_tests_properties(background PROPERTIES TIMEOUT 20)
 add_test(NAME hash58 COMMAND hash58_test)
 add_test(NAME hash72 COMMAND hash72_test)
 add_test(NAME hashab COMMAND hashab_test)

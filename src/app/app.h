@@ -1,6 +1,9 @@
 #pragma once
 
 #include "audio/player.h"
+#include "device/device_session.h"
+#include "util/background_job.h"
+#include "library/artwork.h"
 #include "device/device_watcher.h"
 #include "device/ipod_recovery.h"
 #include "device/filesystem_player.h"
@@ -30,19 +33,19 @@ struct GLFWwindow;
 
 namespace podbox {
 
-class App {
+class App : private DeviceSession {
 public:
     explicit App(const Fonts& fonts)
         : fonts_(fonts), player_(AudioPlayer::create()) {}
 
-    // Joins the scan worker so a rescan in flight cannot outlive the app.
+    // Joins owned workers as a lifetime backstop after close has drained them.
     ~App();
 
     // Draws one frame of the UI. Call between ImGui NewFrame/Render.
     void frame();
     // Called before UI teardown; returns false if copied songs remain unsaved.
     bool prepareToClose();
-    bool closeWithoutSaving() const { return closeWithoutSaving_; }
+    bool wantsToClose() const { return closeWithoutSaving_ || closeRequested_; }
 
     // The window, so dragging the toolbar can move it. The toolbar occupies
     // the title bar, so there is nothing else left to grab.
@@ -63,6 +66,7 @@ public:
     void togglePlayback();
 
 private:
+    friend struct AppTestAccess;
     // Which source the main panel is showing. Library is the Mac-side
     // collection; the rest are the connected iPod's. Music, Podcasts and
     // Audiobooks are the same track list partitioned by media type, the way
@@ -70,6 +74,52 @@ private:
     enum class View { Device, Music, Playlist, Library, Podcasts, Audiobooks };
 
     void updateLibrary();
+    void applyDeviceJob();
+    void startEject(const std::filesystem::path& mount,
+        std::function<bool(const std::filesystem::path&, std::string*)> eject = ejectDevice);
+    void applyBackgroundWork();
+    void saveHost();
+    bool appleMusicSyncing() const { return musicSyncing_; }
+    bool musicSyncing_ = false;
+    struct BackupRow { std::filesystem::path path; std::string label; };
+    struct MonitorResult { std::filesystem::path mount; bool syncing = false; bool backups = false; std::vector<BackupRow> rows; };
+    BackgroundJob<MonitorResult> monitorJob_;
+    double lastMonitor_ = -2;
+    bool backupsLoaded_ = false;
+    std::vector<BackupRow> backupRows_;
+    BackgroundJob<bool> hostSaveJob_;
+    bool hostSavePending_ = false;
+    BackgroundJob<std::filesystem::path> folderJob_;
+    struct DropResult { std::filesystem::path mount; std::vector<std::filesystem::path> files; };
+    BackgroundJob<DropResult> dropJob_;
+    BackgroundJob<ArtImage> artJob_;
+    BackgroundJob<int> tagJob_;
+    BackgroundJob<bool> encoderJob_;
+    bool encoderChecked_ = false;
+    bool mp3Available_ = false;
+    BackgroundJob<bool> fingerprintSaveJob_;
+    bool fingerprintSavePending_ = false;
+    BackgroundJob<std::unordered_map<std::string, bool>> folderCheckJob_;
+    std::unordered_map<std::string, bool> folderExists_;
+    double lastFolderCheck_ = -2;
+
+    BackgroundJob<SyncPlan> syncPlanJob_;
+    BackgroundJob<std::vector<DuplicateGroup>> duplicateJob_;
+    std::vector<std::pair<std::filesystem::path, Track>> pendingHostTags_;
+    std::filesystem::path artworkPath_, artworkJobPath_;
+    std::filesystem::path ejectingMount_;
+
+    enum class DeviceJobKind { Load, Save, Restore, Eject, Recovery, Delete };
+    struct DeviceResult {
+        DeviceSession session;
+        bool ok = true;
+        std::string error;
+        int removed = 0;
+    };
+    BackgroundJob<DeviceResult> deviceJob_;
+    DeviceJobKind deviceJobKind_ = DeviceJobKind::Load;
+    bool closeRequested_ = false;
+
     // Point the main panel at a different source. Selection is per-source, so
     // switching always clears it — four copies of this used to drift apart.
     // `playlistIndex` is only meaningful for View::Playlist.
@@ -100,36 +150,13 @@ private:
     bool browserApplies() const;
     void drawColumnBrowser(float width);
     void applyCompletedAdds();
+    // Queues a snapshot save; true means accepted, not persisted.
     bool writeDatabase();
     const DeviceInfo* activeDevice() const;
     void activateDevice(const std::filesystem::path& mount);
     void finishPendingDeviceCopy();
     bool connectedIpod() const;
     ImportTarget currentImportTarget() const;
-    // True when this iPod's database can be rewritten at all. iPod classic
-    // and nano 3G onwards carry a checksum over the database that PodBox
-    // cannot produce until it has proven it can reproduce the one already
-    // there; writing without it leaves the device unable to read its own
-    // library. Every mutation funnels through writeDatabase(), which refuses
-    // when this is false — the UI calls it too, so the affected controls are
-    // disabled rather than failing after the user commits to something.
-    bool writesSupported() const;
-    std::string writeBlockReason() const;
-    // Proves the device's checksum against its own database before ever
-    // writing one. The iPod already accepts what is on it, so recomputing
-    // that file's checksum and comparing it to the stored one settles whether
-    // PodBox can produce a checksum this device will accept — without risking
-    // anything. For hash72 this also recovers the (IV, random) pair the
-    // device signs with and writes its HashInfo file.
-    void verifyChecksum();
-    // The database file this device actually keeps its library in: iTunesCDB
-    // on nano 5G and later, iTunesDB everywhere else.
-    std::filesystem::path dbFilePath() const;
-    // True when Apple Music appears to be mid-sync on this device. Two
-    // writers on one iTunesDB is the one thing that can genuinely corrupt it.
-    bool appleMusicSyncing() const;
-    void rotateBackups(const std::filesystem::path& dbPath);
-    std::vector<std::filesystem::path> availableBackups() const;
     bool restoreSupported() const;
     void drawRestoreModal();
     void openRecovery();
@@ -150,7 +177,7 @@ private:
     // Removes many tracks with a single index rebuild and a single DB write.
     // `remap` optionally redirects playlist references from a removed track to
     // one that is being kept, so deduplicating never shortens a playlist.
-    // Returns how many tracks were actually removed.
+    // Returns how many removals were queued; completion reports actual results.
     int performDeleteMany(
         const std::vector<std::uint32_t>& ids,
         const std::unordered_map<std::uint32_t, std::uint32_t>* remap = nullptr);
@@ -198,17 +225,11 @@ private:
     GLFWwindow* window_ = nullptr;
     DeviceWatcher watcher_;
 
-    std::optional<Library> library_;
     // The Mac-side library, plus a Library-shaped view of it so the track
     // table, search, sorting and dedupe all work on it unchanged.
     HostLibrary host_;
     Library hostView_;
     std::unordered_map<std::uint32_t, int> hostIndexById_;
-    // Set when the device's Play Counts file could not be matched to the
-    // track list. While true the file is preserved rather than deleted: it
-    // still holds real listening history that a later load may be able to
-    // merge.
-    bool playCountsUnmatched_ = false;
     bool hostLoaded_ = false;
 
     // A rescan runs on a worker over its own copy of the library and is
@@ -216,40 +237,18 @@ private:
     // blocks the frame loop.
     struct HostScan {
         std::thread thread;
+        std::atomic<bool> cancel{false};
         std::atomic<bool> finished{false};
         std::unique_ptr<HostLibrary> result;
         ScanStats stats;
+        std::string error;
         bool running = false;
     };
     HostScan scan_;
 
-    // Set only when verifyChecksum() has confirmed PodBox reproduces the
-    // checksum already on the device. Writes stay refused until it does.
-    bool hash58Verified_ = false;
-    std::vector<std::uint8_t> hash58Guid_;
-    bool hash72Verified_ = false;
-    // The (IV, random) pair recovered from the device's own database; every
-    // write signs with them so the device accepts the result.
-    std::vector<std::uint8_t> hash72Iv_;
-    std::vector<std::uint8_t> hash72Rndpart_;
-    bool hashAbVerified_ = false;
-    std::vector<std::uint8_t> hashAbUuid_;
-    std::vector<std::uint8_t> hashAbNonce_;
-
-    // A 3rd/4th-generation Shuffle has both iTunesDB (metadata used by the
-    // desktop) and modern iTunesSD (the database its firmware plays). Older
-    // Shuffles also have iTunesSD but use an incompatible format.
-    ItunesSdKind itunesSdKind_ = ItunesSdKind::None;
-
-    std::string libraryError_;
-    std::filesystem::path loadedMount_;
-    std::optional<DeviceInfo> loadedDeviceInfo_;
     std::filesystem::path requestedDeviceMount_;
     std::filesystem::path pendingCopyMount_;
     std::vector<std::filesystem::path> pendingCopyFiles_;
-    FilesystemPlayerState filesystemState_;
-    std::unordered_set<std::uint32_t> managedFilesystemTrackIds_;
-    std::unordered_map<std::uint32_t, int> trackIndexById_;
 
     View view_ = View::Device;
     int playlistIndex_ = -1;
@@ -292,9 +291,6 @@ private:
 
     SyncEngine sync_;
     ImportFormat importFormat_ = ImportFormat::Original;
-    // Source fingerprints for the tracks on this device, so a re-drop of a
-    // file is recognised even when importing transcoded it.
-    FingerprintStore fingerprints_;
     bool skipDuplicates_ = true;
     bool pendingDbWrite_ = false;
     bool batchWriteFailed_ = false;
@@ -302,14 +298,10 @@ private:
     bool closeWithoutSaving_ = false;
     int lastBatchAdded_ = 0;
     int lastBatchSkipped_ = 0;
-    std::uint32_t nextTrackId_ = 100;
     std::uint32_t deleteRequestId_ = 0;
     std::string statusMsg_;
     double statusMsgUntil_ = 0.0;
 
-    // Set after each of our own writes, so a fresher mtime on the device
-    // means somebody else touched it.
-    std::filesystem::file_time_type ownWriteTime_{};
     bool restoreOpen_ = false;
     struct RecoveryUi {
         bool open = false;
@@ -364,6 +356,9 @@ private:
         bool copying = false;
         AppleMusicRead read;
         CopyResult copy;
+        HostLibrary hostResult;
+        int added = 0;
+        std::string error;
         std::string current;
         std::mutex mutex;
     };
@@ -390,11 +385,6 @@ private:
         bool justOpened = false;
     };
     PlaylistEdit plEdit_;
-    // VoiceOver files are keyed by playlist dbid rather than name. Renames
-    // must explicitly refresh the existing audio; successful deletes clean
-    // up their now-unreferenced announcements.
-    std::unordered_set<std::uint64_t> refreshPlaylistVoiceOver_;
-    std::unordered_set<std::uint64_t> removedPlaylistVoiceOver_;
 
     // Artwork preview for the selected track. The GL texture is created
     // lazily and refreshed only when the selection changes.

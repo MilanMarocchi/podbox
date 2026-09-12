@@ -285,7 +285,7 @@ bool HostLibrary::upsert(const fs::path& file, const Track& meta,
     return true;
 }
 
-ScanStats HostLibrary::rescan(bool fingerprintFiles, const bool* cancelled,
+ScanStats HostLibrary::rescan(bool fingerprintFiles, const std::atomic<bool>* cancelled,
                               std::string* currentFile) {
     ScanStats stats;
     std::error_code ec;
@@ -307,7 +307,7 @@ ScanStats HostLibrary::rescan(bool fingerprintFiles, const bool* cancelled,
                  w.path, fs::directory_options::skip_permission_denied, ec);
              it != fs::recursive_directory_iterator(); it.increment(ec)) {
             if (ec) break;
-            if (cancelled && *cancelled) return stats;
+            if (cancelled && cancelled->load()) return stats;
 
             const fs::path& p = it->path();
             if (it->is_directory(ec)) {

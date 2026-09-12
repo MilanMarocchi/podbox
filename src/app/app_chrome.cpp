@@ -49,28 +49,34 @@ void App::updateArtwork() {
             }
         }
     }
-    if (!track) {
+    const fs::path path = track ? trackFilePath(*track) : fs::path{};
+    if (path != artworkPath_ || want != art_.trackId) {
+        artworkPath_ = path;
+        art_.trackId = track ? want : 0;
         art_.hasImage = false;
-        art_.trackId = 0;
-        return;
     }
-    if (want == art_.trackId) return;  // already current
-    art_.trackId = want;
-    art_.hasImage = false;
-
-    const ArtImage img = loadEmbeddedArtwork(trackFilePath(*track));
-    if (!img.ok()) return;
-
-    if (art_.texture == 0) glGenTextures(1, &art_.texture);
-    glBindTexture(GL_TEXTURE_2D, art_.texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, img.rgba.data());
-    art_.hasImage = true;
+    if (artJob_.ready()) {
+        ArtImage img;
+        try { img = std::move(*artJob_.take()); } catch (...) {}
+        // Selection can change while decoding. Never install stale artwork.
+        if (artworkJobPath_ == artworkPath_ && img.ok()) {
+            if (art_.texture == 0) glGenTextures(1, &art_.texture);
+            glBindTexture(GL_TEXTURE_2D, art_.texture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
+            art_.hasImage = true;
+        }
+    }
+    if (!artJob_.busy() && !path.empty() && artworkJobPath_ != path &&
+        !closeRequested_ && ejectingMount_.empty() && ejectRequestedMount_.empty()) {
+        artworkJobPath_ = path;
+        artJob_.start([path] { return loadEmbeddedArtwork(path); });
+    }
 }
 
 void App::drawArtworkPane(float sidebarHeight) {
@@ -337,13 +343,16 @@ void App::drawToolbar() {
                     IM_COL32(255, 255, 255, 170));
 
         const bool syncing = sync_.busy();
-        if (!syncing && playingTrackId_ != 0) {
+        if (!deviceJob_.busy() && !syncing && playingTrackId_ != 0) {
             drawNowPlaying(a, b);
         } else {
             const DeviceInfo* dev = activeDevice();
             std::string line1 = dev ? dev->volumeName : "PodBox";
             std::string line2;
-            if (syncing) {
+            if (deviceJob_.busy()) {
+                line1 = statusMsg_;
+                line2 = "Please keep the player connected";
+            } else if (syncing) {
                 line1 = "Copying “" + sync_.currentName() + "”";
                 line2 = std::to_string(std::min(sync_.batchDone() + 1,
                                                 sync_.batchTotal())) +
@@ -930,7 +939,7 @@ void App::drawDeviceView(const DeviceInfo& dev) {
                        int(ImportFormat::Original));
     ImGui::RadioButton("Convert everything to Apple Lossless (ALAC)", &fmt,
                        int(ImportFormat::Alac));
-    ImGui::RadioButton(mp3EncoderAvailable()
+    ImGui::RadioButton(mp3Available_
                            ? "Convert everything to MP3 (320 kbps)"
                            : "Convert everything to AAC (256 kbps)",
                        &fmt, int(ImportFormat::Mp3));
@@ -1283,6 +1292,9 @@ void App::drawTrackTable() {
 // Cmd+A, Cmd+I and Delete for the track table. Kept apart from the drawing
 // because it is the one part of it that is not drawing.
 void App::handleTrackTableKeys() {
+    // Raw key polling is not suppressed by ImGui::BeginDisabled.
+    if (deviceJob_.busy() || !ejectRequestedMount_.empty() || closeRequested_ ||
+        scan_.running || apple_.copying) return;
     const ImGuiIO& io = ImGui::GetIO();
     const bool command = io.KeySuper || io.KeyCtrl;
     if (!io.WantTextInput && command && ImGui::IsKeyPressed(ImGuiKey_A)) {
@@ -1318,9 +1330,7 @@ void App::handleTrackTableKeys() {
             }
             if (removed > 0) {
                 visibleDirty_ = true;
-                if (writeDatabase())
-                    setStatus("Removed " + plural(removed, "song", "songs") +
-                              " from the playlist");
+                writeDatabase();
             }
         } else if (viewingHost()) {
             // Deleting from the Mac library would mean deleting the user's
@@ -1496,7 +1506,7 @@ void App::drawStatusBar() {
 
     // Whatever is left between the two clusters belongs to the label.
     std::string text;
-    if (!statusMsg_.empty() && ImGui::GetTime() < statusMsgUntil_) {
+    if (!statusMsg_.empty() && (deviceJob_.busy() || ImGui::GetTime() < statusMsgUntil_)) {
         text = statusMsg_;
         addTextCenteredFit(dl, fonts_.label, fonts_.labelSize,
                            wp.x + leftEdge, wp.x + rightEdge, iy,

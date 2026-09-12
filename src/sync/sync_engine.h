@@ -48,13 +48,15 @@ struct ImportTarget {
 };
 
 // Copies queued audio files onto the device on a worker thread and reads
-// their metadata. The UI thread polls takeCompleted() and owns all library
-// mutation and DB writing.
+// their metadata. The UI thread polls takeCompleted(), updates its live
+// library, and queues snapshot database saves on a separate worker.
 class SyncEngine {
 public:
     ~SyncEngine();
     // Stop queued copies, join the current copy, retain completed metadata.
     void stopAndWait();
+    // Signal cancellation without waiting for the current file/transcode.
+    void requestStop();
 
     struct Completed {
         Track track;        // filled when error is empty and !duplicate

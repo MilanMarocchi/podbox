@@ -72,8 +72,7 @@ void App::drawDeleteModal() {
         ImGui::CloseCurrentPopup();
         if (many) {
             const std::vector<std::uint32_t> ids = selection_;
-            const int removed = performDeleteMany(ids);
-            setStatus("Removed " + plural(removed, "song", "songs"));
+            performDeleteMany(ids);
         } else {
             performDelete(id);
         }
@@ -124,8 +123,8 @@ void App::drawFoldersModal() {
         for (const HostTrack& t : host_.tracks())
             if (t.file.string().rfind(w.path.string(), 0) == 0) ++here;
 
-        std::error_code ec;
-        const bool exists = std::filesystem::is_directory(w.path, ec);
+        const auto found = folderExists_.find(w.path.string());
+        const bool exists = found == folderExists_.end() || found->second;
         ImGui::TextColored(
             exists ? v4(pal::Text) : v4(pal::Warning), "%s",
             w.path.c_str());
@@ -154,7 +153,7 @@ void App::drawFoldersModal() {
         ImGui::SameLine();
         if (aqua::button("Remove Them", ImVec2(110, 0))) {
             const int gone = host_.removeMissing();
-            host_.save();
+            saveHost();
             rebuildHostView();
             setStatus("Removed " +
                       plural(gone, "missing song", "missing songs"));
@@ -163,25 +162,27 @@ void App::drawFoldersModal() {
 
     aqua::divider();
     if (aqua::button("Check for Missing Files", ImVec2(180, 0))) {
-        const int n = host_.refreshMissing();
-        host_.save();
-        rebuildHostView();
-        setStatus(n == 0 ? "Every song in your library is present"
-                         : plural(n, "song is", "songs are") + " missing");
+        if (!scan_.running && !apple_.copying) {
+            if (scan_.thread.joinable()) scan_.thread.join();
+            scan_.running = true;
+            scan_.finished.store(false);
+            scan_.error.clear();
+            scan_.result = std::make_unique<HostLibrary>(host_);
+            scan_.thread = std::thread([this] {
+                try { scan_.stats = {}; scan_.stats.missing = scan_.result->refreshMissing(); }
+                catch (const std::exception& e) { scan_.error = e.what(); }
+                scan_.finished.store(true);
+            });
+        }
     }
     ImGui::SameLine();
     if (aqua::button("Add Folder…", ImVec2(120, 0))) {
-        const std::filesystem::path picked = chooseFolderDialog();
-        if (!picked.empty()) {
-            host_.addWatchFolder(picked);
-            host_.save();
-            rescanWatchFolders();
-        }
+        if (!folderJob_.busy()) folderJob_.start(chooseFolderDialog);
     }
     ImGui::SameLine();
     aqua::rightAlignButtons(1, 92.0f);
     if (aqua::button("Done", ImVec2(92, 0), true)) {
-        host_.save();
+        saveHost();
         foldersOpen_ = false;
         ImGui::CloseCurrentPopup();
     }
@@ -196,17 +197,19 @@ void App::startAppleMusicRead() {
     apple_.finished.store(false);
     apple_.cancel.store(false);
     apple_.thread = std::thread([this] {
-        AppleMusicRead r = readAppleMusicLibrary();
-        {
-            std::lock_guard<std::mutex> lock(apple_.mutex);
-            apple_.read = std::move(r);
-        }
+        try {
+            AppleMusicRead r = readAppleMusicLibrary();
+            {
+                std::lock_guard<std::mutex> lock(apple_.mutex);
+                apple_.read = std::move(r);
+            }
+        } catch (const std::exception& e) { apple_.read.error = e.what(); }
         apple_.finished.store(true);
     });
 }
 
 void App::startAppleMusicCopy() {
-    if (apple_.busy || apple_.read.tracks.empty()) return;
+    if (apple_.busy || scan_.running || apple_.read.tracks.empty()) return;
     if (apple_.thread.joinable()) apple_.thread.join();
     apple_.busy = true;
     apple_.copying = true;
@@ -215,22 +218,33 @@ void App::startAppleMusicCopy() {
     apple_.done.store(0);
     apple_.total.store(int(apple_.read.tracks.size()));
 
+    apple_.error.clear();
+    apple_.hostResult = host_;
     apple_.thread = std::thread([this] {
-        CopyResult res = copyAppleMusicFiles(
-            apple_.read.tracks, appleMusicCopyRoot(),
-            [this](int done, int total, const std::string& name) {
-                apple_.done.store(done);
-                apple_.total.store(total);
-                {
-                    std::lock_guard<std::mutex> lock(apple_.mutex);
-                    apple_.current = name;
-                }
-                return !apple_.cancel.load();
-            });
-        {
-            std::lock_guard<std::mutex> lock(apple_.mutex);
-            apple_.copy = res;
-        }
+        try {
+            CopyResult res = copyAppleMusicFiles(
+                apple_.read.tracks, appleMusicCopyRoot(),
+                [this](int done, int total, const std::string& name) {
+                    apple_.done.store(done);
+                    apple_.total.store(total);
+                    {
+                        std::lock_guard<std::mutex> lock(apple_.mutex);
+                        apple_.current = name;
+                    }
+                    return !apple_.cancel.load();
+                });
+            {
+                std::lock_guard<std::mutex> lock(apple_.mutex);
+                apple_.copy = res;
+            }
+            apple_.added = 0;
+            for (const auto& track : apple_.read.tracks) {
+                std::error_code ec;
+                if (track.file.empty() || !fs::exists(track.file, ec)) continue;
+                if (apple_.hostResult.upsert(track.file, track.meta, "applemusic", fingerprintFile(track.file)))
+                    ++apple_.added;
+            }
+        } catch (const std::exception& e) { apple_.error = e.what(); }
         apple_.finished.store(true);
     });
 }
@@ -243,18 +257,12 @@ void App::applyFinishedAppleMusic() {
     if (!apple_.copying) return;  // a read just finished; the sheet shows it
 
     apple_.copying = false;
-    // Fold the copies into the library. Matching on the destination path
-    // means re-running an import updates play counts instead of duplicating.
-    int added = 0;
-    for (const AppleMusicTrack& t : apple_.read.tracks) {
-        if (t.file.empty()) continue;
-        std::error_code ec;
-        if (!fs::exists(t.file, ec)) continue;  // cancelled before this one
-        if (host_.upsert(t.file, t.meta, "applemusic", fingerprintFile(t.file)))
-            ++added;
-    }
-    host_.save();
+    if (!apple_.error.empty()) { setStatus(apple_.error); return; }
+    const int added = apple_.added;
+    host_ = std::move(apple_.hostResult);
+    saveHost();
     rebuildHostView();
+    pullPlayCountsToHost();
 
     setStatus("Imported " + plural(added, "song", "songs") +
               " from Apple Music" +
@@ -507,7 +515,7 @@ void App::drawGetInfoModal() {
         auto assign = [](std::string& field, const char* buf) {
             if (buf[0] != '\0') field = buf;
         };
-        int changed = 0, tagFailures = 0;
+        int changed = 0;
         for (std::uint32_t id : selection_) {
             if (viewingHost()) {
                 HostTrack* h = nullptr;
@@ -524,10 +532,7 @@ void App::drawGetInfoModal() {
                 if (getInfo_.mediaChoice >= 0)
                     h->meta.mediaType = kMediaChoices[getInfo_.mediaChoice].type;
                 ++changed;
-                if (getInfo_.writeTags) {
-                    std::string err;
-                    if (!writeFileTags(h->file, h->meta, &err)) ++tagFailures;
-                }
+                if (getInfo_.writeTags) pendingHostTags_.emplace_back(h->file, h->meta);
             } else {
                 if (!library_ || !index) break;
                 const auto it = index->find(id);
@@ -546,17 +551,13 @@ void App::drawGetInfoModal() {
                 // Folder-based players build their own library from file
                 // tags, so database-only editing would disappear on the next
                 // reconnect. iPods keep the established database-only path.
-                if (!connectedIpod()) {
-                    std::string err;
-                    if (!writeFileTags(
-                            locationToPath(loadedMount_, t.location), t, &err))
-                        ++tagFailures;
-                }
+                if (!connectedIpod())
+                    pendingFileTags_.emplace_back(locationToPath(loadedMount_, t.location), t);
             }
         }
 
         if (viewingHost()) {
-            host_.save();
+            saveHost();
             rebuildHostView();
         } else if (changed > 0) {
             writeDatabase();
@@ -566,25 +567,24 @@ void App::drawGetInfoModal() {
         ImGui::CloseCurrentPopup();
 
         std::string msg = "Updated " + plural(changed, "song", "songs");
-        if (tagFailures)
-            msg += " (" + std::to_string(tagFailures) + " file tags failed)";
-        setStatus(msg);
+        if (viewingHost()) setStatus(msg);
     }
     aqua::endSheet();
 }
 
 void App::refreshSyncPlan() {
+    if (syncPlanJob_.busy() || closeRequested_ || !ejectRequestedMount_.empty()) return;
     syncUi_.dirty = false;
     syncUi_.plan = {};
     if (!library_) return;
-    const auto* removable =
-        connectedIpod() ? nullptr : &managedFilesystemTrackIds_;
-    syncUi_.plan = planSync(host_, *library_, fingerprints_, loadedMount_,
-                            syncUi_.options, removable);
+    syncPlanJob_.start([host = host_, device = static_cast<const DeviceSession&>(*this), options = syncUi_.options] {
+        return planSync(host, *device.library_, device.fingerprints_, device.loadedMount_, options,
+                        device.connectedIpod() ? nullptr : &device.managedFilesystemTrackIds_);
+    });
 }
 
 void App::startSync() {
-    if (!library_ || syncUi_.plan.empty()) return;
+    if (!library_ || syncUi_.plan.empty() || syncPlanJob_.busy() || syncUi_.dirty) return;
 
     // Remove dead database entries first. Besides cleaning up songs that can
     // no longer play, this keeps the import duplicate guard below from seeing
@@ -594,9 +594,7 @@ void App::startSync() {
     removeIds.insert(removeIds.end(), syncUi_.plan.toRemove.begin(),
                      syncUi_.plan.toRemove.end());
     if (!removeIds.empty()) {
-        const int removed = performDeleteMany(removeIds);
-        setStatus("Removed " + plural(removed, "song", "songs") +
-                  " with missing or unwanted files");
+        if (!performDeleteMany(removeIds)) return;
     }
 
     // Copying reuses the drag-and-drop pipeline: same worker, same transcode,
@@ -612,6 +610,11 @@ void App::startSync() {
         }
     }
     if (files.empty()) return;
+    if (deviceJob_.busy()) {
+        pendingCopyMount_ = loadedMount_;
+        pendingCopyFiles_ = std::move(files);
+        return;
+    }
 
     DupeGuard guard;
     guard.enabled = true;
@@ -731,7 +734,7 @@ void App::drawSyncModal() {
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    const bool blocked = syncUi_.plan.empty() || !fits || blockedByRemoval ||
+    const bool blocked = syncPlanJob_.busy() || syncUi_.dirty || syncUi_.plan.empty() || !fits || blockedByRemoval ||
                          sync_.busy();
     ImGui::BeginDisabled(blocked);
     if (aqua::button("Sync", ImVec2(92, 0), !blocked)) {
@@ -740,24 +743,25 @@ void App::drawSyncModal() {
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndDisabled();
-    if (syncUi_.plan.empty())
+    if (syncPlanJob_.busy() || syncUi_.dirty)
+        aqua::body(fonts_, "Checking songs and available files…");
+    else if (syncUi_.plan.empty())
         aqua::body(fonts_, "Nothing to do — the player already matches.");
     aqua::endSheet();
 }
 
 void App::refreshDuplicates() {
+    if (duplicateJob_.busy()) return;
     dupes_.dirty = false;
     dupes_.groups.clear();
     dupes_.enabled.clear();
     if (!library_) return;
-
-    dupes_.groups =
-        findDuplicates(*library_, dupes_.mode, fingerprints_.all());
-    if (dupes_.identicalOnly)
-        std::erase_if(dupes_.groups, [](const DuplicateGroup& g) {
-            return !g.allIdenticalFiles;
-        });
-    dupes_.enabled.assign(dupes_.groups.size(), 1);
+    duplicateJob_.start([library = *library_, fingerprints = fingerprints_.all(),
+                         mode = dupes_.mode, identical = dupes_.identicalOnly] {
+        auto groups = findDuplicates(library, mode, fingerprints);
+        if (identical) std::erase_if(groups, [](const auto& g) { return !g.allIdenticalFiles; });
+        return groups;
+    });
 }
 
 void App::startVerifyPass() {
@@ -782,7 +786,7 @@ void App::drawDuplicatesModal() {
     if (auto results = dupes_.verify.take(); !results.empty()) {
         for (const auto& [dbid, fp] : results)
             fingerprints_.put(dbid, fp, FingerprintStore::Origin::Device);
-        if (!dupes_.verify.running() && library_) fingerprints_.save(loadedMount_);
+        if (library_) fingerprintSavePending_ = true;
         dupes_.dirty = true;
     }
 
@@ -911,9 +915,7 @@ void App::drawDuplicatesModal() {
                 remap[ids[k]] = ids[0];  // playlists follow the keeper
             }
         }
-        const int removed = performDeleteMany(doomed, &remap);
-        setStatus("Removed " + plural(removed, "duplicate", "duplicates") +
-                  " · freed " + formatBytes(totalBytes));
+        performDeleteMany(doomed, &remap);
         dupes_.open = false;
         ImGui::CloseCurrentPopup();
     }
@@ -933,7 +935,8 @@ void App::openRecovery() {
     recovery_.open = true;
     recovery_.running = true;
     recovery_.thread = std::thread([this, device = *device] {
-        recovery_.result = scanIpodRecovery(device, &recovery_.cancel);
+        try { recovery_.result = scanIpodRecovery(device, &recovery_.cancel); }
+        catch (const std::exception& e) { recovery_.result.error = e.what(); }
         recovery_.finished.store(true);
     });
 }
@@ -961,7 +964,7 @@ void App::drawRecoveryModal() {
         const auto& result = recovery_.result;
         ImGui::Text("%zu songs can be recovered (%s)", result.library.tracks.size(),
                     formatBytes(result.musicBytes).c_str());
-        if (!availableBackups().empty())
+        if (!backupRows_.empty())
             ImGui::TextWrapped("A database backup is available. Restore Backup can also recover playlists and listening history; try it first.");
         aqua::body(fonts_, "Titles, artists and albums come from the files' tags. Playlists, ratings and play counts cannot be reconstructed from audio. Any damaged database and old play counts are kept in a recovery archive on the iPod.");
         if (!result.skipped.empty()) {
@@ -994,19 +997,17 @@ void App::drawRecoveryModal() {
         ImGui::CloseCurrentPopup();
     }
     if (rebuild) {
-        fs::path archive;
-        std::string error;
-        if (installIpodRecovery(recovery_.result, &archive, &error)) {
-            const auto count = recovery_.result.library.tracks.size();
-            recovery_.open = false;
-            ImGui::CloseCurrentPopup();
-            loadedMount_.clear();
-            updateLibrary();
-            setStatus("Recovered " + std::to_string(count) + " songs. The iPod is ready to sync.");
-        } else {
-            recovery_.result.error = error;
-            setStatus("Recovery failed: " + error);
-        }
+        recovery_.open = false;
+        ImGui::CloseCurrentPopup();
+        deviceJobKind_ = DeviceJobKind::Recovery;
+        deviceJob_.start([recovery = recovery_.result] {
+            DeviceResult result;
+            fs::path archive;
+            result.ok = installIpodRecovery(recovery, &archive, &result.error);
+            result.session.status = "Recovered " + std::to_string(recovery.library.tracks.size()) + " songs";
+            return result;
+        });
+        setStatus("Rebuilding song database…");
     }
     aqua::endSheet();
 }
@@ -1024,36 +1025,14 @@ void App::drawRestoreModal() {
                "added since the backup stays on the disk, just unlisted.");
     aqua::divider();
 
-    const std::vector<fs::path> backups = availableBackups();
-    if (backups.empty()) ImGui::TextDisabled("No backups yet.");
-
+    if (!backupsLoaded_) ImGui::TextDisabled("Checking backups…");
+    else if (backupRows_.empty()) ImGui::TextDisabled("No backups yet.");
     fs::path chosen;
-    for (const fs::path& b : backups) {
-        std::error_code ec;
-        const auto stamp = fs::last_write_time(b, ec);
-        const auto sys =
-            std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-                stamp - fs::file_time_type::clock::now() +
-                std::chrono::system_clock::now());
-        const std::time_t when = std::chrono::system_clock::to_time_t(sys);
-        char stampText[64] = "unknown time";
-        if (const std::tm* tm = std::localtime(&when))
-            std::strftime(stampText, sizeof(stampText), "%d %b %H:%M", tm);
-
-        // Parsing each candidate is what makes this trustworthy: the song
-        // count is the only thing that tells you which backup you want.
-        const ParseResult res = parseItunesDb(b);
-        ImGui::PushID(b.c_str());
-        ImGui::BeginDisabled(!res.library);
-        if (aqua::button("Restore", ImVec2(88, 0))) chosen = b;
-        ImGui::EndDisabled();
+    for (const auto& row : backupRows_) {
+        ImGui::PushID(row.path.c_str());
+        if (aqua::button("Restore", ImVec2(88, 0))) chosen = row.path;
         ImGui::SameLine();
-        ImGui::Text("%s   %s", stampText,
-                    res.library
-                        ? plural(int(res.library->tracks.size()), "song",
-                                 "songs")
-                              .c_str()
-                        : "unreadable");
+        ImGui::TextUnformatted(row.label.c_str());
         ImGui::PopID();
     }
 
@@ -1074,198 +1053,18 @@ void App::drawRestoreModal() {
         setStatus(writeBlockReason());
         return;
     }
-    if (appleMusicSyncing()) {
-        setStatus("Apple Music is syncing this iPod — try again when it "
-                  "finishes");
-        return;
-    }
-    const fs::path dbPath = dbFilePath();
-    const fs::path sdPath =
-        loadedMount_ / "iPod_Control" / "iTunes" / "iTunesSD";
-    const fs::path statsPath =
-        loadedMount_ / "iPod_Control" / "iTunes" / "iTunesStats";
-    const bool restoreSqlite =
-        library_ && library_->hashingScheme == kChecksumHashAB;
-    const fs::path sqlitePath =
-        dbPath.parent_path() / "iTunes Library.itlp";
-    std::error_code ec;
-    fs::path chosenSd, chosenStats, chosenSqlite;
-    const std::string db = dbPath.string();
-    const std::string selected = chosen.string();
-    if (selected.rfind(db, 0) != 0) {
-        restoreOpen_ = false;
-        setStatus("Could not match this backup to its companion databases");
-        return;
-    }
-    const std::string suffix = selected.substr(db.size());
-    if (itunesSdKind_ == ItunesSdKind::Modern) {
-        chosenSd = sdPath.string() + suffix;
-        chosenStats = statsPath.string() + suffix;
-        if (!fs::exists(chosenSd, ec) || !fs::exists(chosenStats, ec)) {
-            restoreOpen_ = false;
-            setStatus("This backup predates Shuffle support and has no matching "
-                      "iTunesSD/iTunesStats backup");
-            return;
-        }
-    }
-    if (restoreSqlite) {
-        chosenSqlite = sqlitePath.string() + suffix;
-        if (!fs::is_directory(chosenSqlite, ec)) {
-            restoreOpen_ = false;
-            setStatus("This backup has no matching nano SQLite bundle");
-            return;
-        }
-    }
-    if (!library_) {
-        const auto candidate = parseItunesDb(chosen);
-        if (!candidate.library || candidate.library->hashingScheme != kChecksumNone ||
-            candidate.library->compressed) {
-            setStatus("This backup is not a usable unsigned iPod video database");
-            return;
-        }
-    }
-    // A selected .bak.1 becomes .bak.2 when rotation starts, so stage the
-    // chosen pair before rotating the live state into .bak.1.
-    const fs::path restoreTmp = dbPath.string() + ".podbox-restore-tmp";
-    fs::copy_file(chosen, restoreTmp, fs::copy_options::overwrite_existing, ec);
-    if (ec) {
-        restoreOpen_ = false;
-        setStatus("Could not stage restore: " + ec.message());
-        return;
-    }
-    const fs::path restoreSqliteTmp =
-        sqlitePath.string() + ".podbox-restore-tmp";
-    if (restoreSqlite) {
-        fs::remove_all(restoreSqliteTmp, ec);
-        ec.clear();
-        fs::copy(chosenSqlite, restoreSqliteTmp,
-                 fs::copy_options::recursive |
-                     fs::copy_options::copy_symlinks, ec);
-        if (ec) {
-            const std::error_code stageError = ec;
-            std::error_code cleanup;
-            fs::remove(restoreTmp, cleanup);
-            fs::remove_all(restoreSqliteTmp, cleanup);
-            restoreOpen_ = false;
-            setStatus("Could not stage nano SQLite restore: " +
-                      stageError.message());
-            return;
-        }
-    }
-    const fs::path restoreSdTmp = sdPath.string() + ".podbox-restore-tmp";
-    const fs::path restoreStatsTmp =
-        statsPath.string() + ".podbox-restore-tmp";
-    if (itunesSdKind_ == ItunesSdKind::Modern) {
-        fs::copy_file(chosenSd, restoreSdTmp,
-                      fs::copy_options::overwrite_existing, ec);
-        if (ec) {
-            const std::error_code stageError = ec;
-            std::error_code cleanup;
-            fs::remove(restoreTmp, cleanup);
-            restoreOpen_ = false;
-            setStatus("Could not stage Shuffle restore: " +
-                      stageError.message());
-            return;
-        }
-        fs::copy_file(chosenStats, restoreStatsTmp,
-                      fs::copy_options::overwrite_existing, ec);
-        if (ec) {
-            const std::error_code stageError = ec;
-            std::error_code cleanup;
-            fs::remove(restoreTmp, cleanup);
-            fs::remove(restoreSdTmp, cleanup);
-            restoreOpen_ = false;
-            setStatus("Could not stage Shuffle statistics restore: " +
-                      stageError.message());
-            return;
-        }
-    }
-    rotateBackups(dbPath);  // the current state becomes undoable too
-    if (restoreSqlite) rotateBackups(sqlitePath);
-    if (itunesSdKind_ == ItunesSdKind::Modern) {
-        rotateBackups(sdPath);
-        rotateBackups(statsPath);
-    }
-    fs::rename(restoreTmp, dbPath, ec);
-    const std::error_code dbRestoreError = ec;
-    std::error_code cleanup;
-    fs::remove(restoreTmp, cleanup);
-    if (dbRestoreError) {
-        fs::remove_all(restoreSqliteTmp, cleanup);
-        fs::remove(restoreSdTmp, cleanup);
-        fs::remove(restoreStatsTmp, cleanup);
-        restoreOpen_ = false;
-        setStatus("Could not restore: " + dbRestoreError.message());
-        return;
-    }
-    if (restoreSqlite) {
-        const fs::path sqliteOld = sqlitePath.string() + ".podbox-old";
-        fs::remove_all(sqliteOld, cleanup);
-        fs::rename(sqlitePath, sqliteOld, ec);
-        if (!ec) fs::rename(restoreSqliteTmp, sqlitePath, ec);
-        if (ec) {
-            const std::error_code sqliteRestoreError = ec;
-            std::error_code rollback;
-            fs::copy_file(dbPath.string() + ".podbox-bak.1", dbPath,
-                          fs::copy_options::overwrite_existing, rollback);
-            if (!fs::exists(sqlitePath, rollback) &&
-                fs::exists(sqliteOld, rollback))
-                fs::rename(sqliteOld, sqlitePath, rollback);
-            fs::remove_all(restoreSqliteTmp, rollback);
-            restoreOpen_ = false;
-            setStatus("Could not restore nano SQLite databases: " +
-                      sqliteRestoreError.message());
-            return;
-        }
-        fs::remove_all(sqliteOld, cleanup);
-    }
-    if (itunesSdKind_ == ItunesSdKind::Modern) {
-        fs::copy_file(restoreSdTmp, sdPath,
-                      fs::copy_options::overwrite_existing, ec);
-        const std::error_code sdRestoreError = ec;
-        fs::remove(restoreSdTmp, cleanup);
-        if (sdRestoreError) {
-            fs::remove(restoreStatsTmp, cleanup);
-            std::error_code rollback;
-            fs::copy_file(dbPath.string() + ".podbox-bak.1", dbPath,
-                          fs::copy_options::overwrite_existing, rollback);
-            fs::copy_file(sdPath.string() + ".podbox-bak.1", sdPath,
-                          fs::copy_options::overwrite_existing, rollback);
-            restoreOpen_ = false;
-            setStatus("Could not restore Shuffle database: " +
-                      sdRestoreError.message());
-            return;
-        }
-        fs::copy_file(restoreStatsTmp, statsPath,
-                      fs::copy_options::overwrite_existing, ec);
-        const std::error_code statsRestoreError = ec;
-        fs::remove(restoreStatsTmp, cleanup);
-        if (statsRestoreError) {
-            std::error_code rollback;
-            fs::copy_file(dbPath.string() + ".podbox-bak.1", dbPath,
-                          fs::copy_options::overwrite_existing, rollback);
-            fs::copy_file(sdPath.string() + ".podbox-bak.1", sdPath,
-                          fs::copy_options::overwrite_existing, rollback);
-            fs::copy_file(statsPath.string() + ".podbox-bak.1", statsPath,
-                          fs::copy_options::overwrite_existing, rollback);
-            restoreOpen_ = false;
-            setStatus("Could not restore Shuffle statistics: " +
-                      statsRestoreError.message());
-            return;
-        }
-    }
-    // On a compressed-database device the placeholder iTunesDB must stay a
-    // zero-byte placeholder, or the device reads the wrong file.
-    if (library_ && library_->compressed) {
-        std::ofstream plain(dbPath.parent_path() / "iTunesDB",
-                            std::ios::binary | std::ios::trunc);
-    }
+    if (deviceJob_.busy()) return;
     restoreOpen_ = false;
-    ownWriteTime_ = fs::last_write_time(dbPath, ec);
     if (player_) player_->stop();
     playingTrackId_ = 0;
-    loadedMount_.clear();  // forces updateLibrary() to re-read from disk
-    setStatus("Restored the database from " + chosen.filename().string());
+    deviceJobKind_ = DeviceJobKind::Restore;
+    deviceJob_.start([snapshot = static_cast<const DeviceSession&>(*this), chosen]() mutable {
+        DeviceResult result;
+        result.ok = snapshot.restoreDatabase(chosen);
+        result.session = std::move(snapshot);
+        return result;
+    });
+    setStatus("Restoring database…");
 }
 
 void App::drawDeletePlaylistModal() {
@@ -1308,7 +1107,7 @@ void App::drawDeletePlaylistModal() {
             --playlistIndex_;
         visibleDirty_ = true;
         ImGui::CloseCurrentPopup();
-        if (writeDatabase()) setStatus("Deleted playlist");
+        writeDatabase();
     }
     aqua::endSheet();
 }
@@ -1386,7 +1185,7 @@ void App::trackContextMenu(const Track& t) {
                 it != ids.end())
                 ids.erase(it);
             visibleDirty_ = true;
-            if (writeDatabase()) setStatus("Removed from playlist");
+            writeDatabase();
         }
     }
 

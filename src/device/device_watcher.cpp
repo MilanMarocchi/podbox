@@ -4,10 +4,23 @@
 
 namespace podbox {
 
-void DeviceWatcher::update(double nowSeconds) {
-    if (nowSeconds - lastScan_ < kScanIntervalSeconds) return;
+void DeviceWatcher::update(double nowSeconds, bool allowScan) {
+    if (job_.ready()) {
+        try {
+            auto found = job_.take();
+            // A scan started before an eject must not resurrect that volume.
+            std::erase_if(*found, [&](const DeviceInfo& d) {
+                return forgotten_.count(d.mountPoint.string()) != 0;
+            });
+            devices_ = std::move(*found);
+        } catch (...) {
+            // Preserve the last successful discovery on transient failures.
+        }
+        forgotten_.clear();
+    }
+    if (!allowScan || job_.busy() || nowSeconds - lastScan_ < kScanIntervalSeconds) return;
     lastScan_ = nowSeconds;
-    devices_ = findMediaDevices();
+    job_.start(scan_);
 }
 
 const DeviceInfo* DeviceWatcher::find(
@@ -18,6 +31,7 @@ const DeviceInfo* DeviceWatcher::find(
 }
 
 void DeviceWatcher::forget(const std::filesystem::path& mount) {
+    if (job_.busy()) forgotten_.insert(mount.string());
     std::erase_if(devices_, [&](const DeviceInfo& device) {
         return device.mountPoint == mount;
     });

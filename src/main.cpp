@@ -70,7 +70,7 @@ int main() {
     });
 
     for (;;) {
-        if (glfwWindowShouldClose(window) || app.closeWithoutSaving()) {
+        if (glfwWindowShouldClose(window) || app.wantsToClose()) {
             if (app.prepareToClose()) break;
             glfwSetWindowShouldClose(window, GLFW_FALSE);
         }

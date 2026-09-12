@@ -3,6 +3,7 @@
 #include "itdb/itunesdb.h"
 #include "library/fingerprint.h"
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -79,7 +80,7 @@ public:
     //
     // `cancelled` is polled between files so a long scan stays interruptible.
     ScanStats rescan(bool fingerprintFiles = true,
-                     const bool* cancelled = nullptr,
+                     const std::atomic<bool>* cancelled = nullptr,
                      std::string* currentFile = nullptr);
 
     // Marks every track whose file has gone, whatever it was indexed from.
