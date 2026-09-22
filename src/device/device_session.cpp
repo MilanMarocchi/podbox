@@ -292,15 +292,20 @@ bool DeviceSession::writeDatabase() {
     if (!connectedIpod()) {
         std::string error;
         const DeviceInfo* device = activeDevice();
-        if (!device ||
-            !saveFilesystemPlayer(loadedMount_, device->musicDirectory,
-                                  *library_, &filesystemState_, &error)) {
-            setStatus(error.empty() ? "Could not update this player" : error);
+        if (!device) {
+            setStatus("Could not update this player");
             return false;
         }
+        // Fingerprints first: the player save ends by sweeping the "._"
+        // companions FAT and exFAT get for every file written, this included.
         fingerprints_.prune(*library_);
         if (!fingerprints_.save(loadedMount_)) {
             setStatus("Could not save PodBox's fingerprints on this player");
+            return false;
+        }
+        if (!saveFilesystemPlayer(loadedMount_, device->musicDirectory,
+                                  *library_, &filesystemState_, &error)) {
+            setStatus(error.empty() ? "Could not update this player" : error);
             return false;
         }
         return true;

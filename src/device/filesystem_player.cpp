@@ -6,11 +6,16 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
+
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -142,6 +147,46 @@ std::uint64_t stableId(const std::string& kind, const std::string& value) {
     return hash ? hash : 1;
 }
 
+// `name` in Unicode NFC, or empty when it is already NFC or cannot be
+// converted. macOS lists exFAT names decomposed (NFD), yet unlink() of a
+// "._" companion only succeeds with the composed form stored on disk.
+std::string composedName(const std::string& name) {
+#ifdef __APPLE__
+    CFStringRef source = CFStringCreateWithCString(
+        kCFAllocatorDefault, name.c_str(), kCFStringEncodingUTF8);
+    if (!source) return {};
+    CFMutableStringRef composed =
+        CFStringCreateMutableCopy(kCFAllocatorDefault, 0, source);
+    CFRelease(source);
+    if (!composed) return {};
+    CFStringNormalize(composed, kCFStringNormalizationFormC);
+    std::string out(std::size_t(CFStringGetMaximumSizeForEncoding(
+                        CFStringGetLength(composed),
+                        kCFStringEncodingUTF8)) + 1,
+                    '\0');
+    const bool ok = CFStringGetCString(composed, out.data(),
+                                       CFIndex(out.size()),
+                                       kCFStringEncodingUTF8);
+    CFRelease(composed);
+    if (!ok) return {};
+    out.resize(std::strlen(out.c_str()));
+    return out == name ? std::string() : out;
+#else
+    (void)name;
+    return {};
+#endif
+}
+
+// Removes a "._" companion, retrying under its composed name when the
+// listed (decomposed) spelling is refused.
+void removeCompanion(const fs::path& companion) {
+    std::error_code ec;
+    if (fs::remove(companion, ec) && !ec) return;
+    const std::string composed = composedName(companion.filename().string());
+    if (!composed.empty())
+        fs::remove(companion.parent_path() / composed, ec);
+}
+
 // macOS tags every file it creates with extended attributes (at least
 // com.apple.provenance). FAT and exFAT cannot hold them, so the kernel writes
 // a "._name" AppleDouble companion beside each file and folder, and player
@@ -158,7 +203,7 @@ void removeAppleDoubleFiles(const fs::path& root) {
         if (fs::exists(it->path().parent_path() / name.substr(2), existsError))
             companions.push_back(it->path());
     }
-    for (const fs::path& companion : companions) fs::remove(companion, ec);
+    for (const fs::path& companion : companions) removeCompanion(companion);
 }
 
 // The folders PodBox creates get companions beside them too, e.g. "._Music"
@@ -168,7 +213,8 @@ void removeAppleDoubleFolderCompanions(const fs::path& mount,
     fs::path current = mount;
     for (const fs::path& component : relative) {
         std::error_code ec;
-        fs::remove(current / ("._" + component.string()), ec);
+        const fs::path companion = current / ("._" + component.string());
+        if (fs::exists(companion, ec)) removeCompanion(companion);
         current /= component;
     }
 }

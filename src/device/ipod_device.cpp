@@ -191,6 +191,7 @@ std::string detectFilesystem(const fs::path& mountPoint) {
     if (statfs(mountPoint.c_str(), &sb) == 0) {
         const std::string type = sb.f_fstypename;
         if (type == "msdos") return "FAT32 (Windows format)";
+        if (type == "exfat") return "exFAT";
         if (type == "hfs") return "HFS+ (Mac format)";
         return type;
     }
