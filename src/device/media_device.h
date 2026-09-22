@@ -45,6 +45,9 @@ struct DeviceInfo {
     // Lowercase extensions including the dot. ImportFormat::Original copies
     // these unchanged; an unsupported source follows the device's fallback.
     std::unordered_set<std::string> originalExtensions;
+    // Highest sample rate the firmware decodes; 0 when no limit is known.
+    // A supported format above it is converted instead of copied.
+    std::uint32_t maxSampleRate = 0;
 
     bool isIpod() const { return kind == DeviceKind::Ipod; }
 };

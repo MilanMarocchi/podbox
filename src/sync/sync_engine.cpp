@@ -159,9 +159,9 @@ void SyncEngine::run() {
             // writing a second file and letting the UI clean it up later.
             result.duplicate = true;
         } else {
-            const bool originalSupported =
-                target.originalExtensions.count(
-                    toLower(src.extension().string())) > 0;
+            const bool originalSupported = devicePlaysOriginal(
+                target.originalExtensions, target.maxSampleRate, src,
+                meta.track.sampleRate);
             const std::string ext =
                 importExtension(fmt, src, originalSupported);
             std::string location;

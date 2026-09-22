@@ -340,7 +340,16 @@ ImportTarget App::currentImportTarget() const {
                         ? DeviceMusicLayout::IpodFolders
                         : DeviceMusicLayout::ArtistAlbumFolders;
     target.originalExtensions = device->originalExtensions;
+    target.maxSampleRate = device->maxSampleRate;
     return target;
+}
+
+ImportFormat App::currentImportFormat() const {
+    const DeviceInfo* device = activeDevice();
+    return device && importFormatPlayable(importFormat_,
+                                          device->originalExtensions)
+               ? importFormat_
+               : ImportFormat::Original;
 }
 
 void App::onFilesDropped(const std::vector<std::string>& paths) {
@@ -405,7 +414,7 @@ void App::queueFilesToDevice(const std::vector<fs::path>& files) {
                 fp && fp->ok())
                 guard.hashes.insert(fp->hash);
     }
-    sync_.queueAdds(files, currentImportTarget(), importFormat_,
+    sync_.queueAdds(files, currentImportTarget(), currentImportFormat(),
                     std::move(guard));
 }
 

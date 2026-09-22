@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <fstream>
 #include <map>
+#include <span>
 #include <string_view>
 
 #include <unistd.h>  // sync
@@ -363,6 +364,71 @@ std::optional<IpodInfo> findIpod() {
     return std::move(devices.front());
 }
 
+namespace {
+
+// A folder-based player PodBox can recognise before it has a music folder.
+// Such players index their whole volume, so PodBox may create the folder on
+// the first sync instead of waiting for the user to make one.
+struct FilesystemProfile {
+    const char* modelName;
+    std::uint16_t usbVendorId;
+    std::uint16_t usbProductId;
+    const char* markerFile;  // written to the volume root by the firmware
+    const char* defaultMusicDirectory;
+    std::span<const char* const> originalExtensions;
+    std::uint32_t maxSampleRate;
+};
+
+constexpr const char* kEchoExtensions[] = {".mp3", ".m4a", ".aac", ".wav",
+                                           ".aif", ".aiff", ".flac"};
+
+constexpr FilesystemProfile kFilesystemProfiles[] = {
+    // Rockchip-based firmware; the USB serial is a constant "USBV1.00", so
+    // the VID/PID and FiiO's bundled readme are the useful signals. It plays
+    // FLAC and AIFF natively but does not recognise .m4b audiobooks. Tested
+    // on hardware: 24-bit/48 kHz FLAC plays, 96 and 192 kHz do not.
+    {"FiiO Snowsky Echo", 0x071b, 0x3203, "About FIIO.txt", "Music",
+     kEchoExtensions, 48000},
+};
+
+const FilesystemProfile* matchFilesystemProfile(const fs::path& mountPoint,
+                                                const UsbDeviceIdentity& usb) {
+    for (const FilesystemProfile& profile : kFilesystemProfiles) {
+        if (usb.vendorId == profile.usbVendorId &&
+            usb.productId == profile.usbProductId)
+            return &profile;
+        std::error_code ec;
+        if (fs::is_regular_file(mountPoint / profile.markerFile, ec))
+            return &profile;
+    }
+    return nullptr;
+}
+
+// True when `relative` exists below `root` spelled exactly as given. FAT
+// and default APFS are case-insensitive, so is_directory("MUSIC") also finds
+// "Music"; recording the wrong spelling would make every stored location
+// disagree with the folder the player and PodBox's manifest actually use.
+bool hasExactDirectory(const fs::path& root, const fs::path& relative) {
+    fs::path current = root;
+    for (const fs::path& component : relative) {
+        std::error_code ec;
+        bool found = false;
+        for (const auto& entry : fs::directory_iterator(current, ec)) {
+            std::error_code typeError;
+            if (entry.path().filename() == component &&
+                entry.is_directory(typeError)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+        current /= component;
+    }
+    return true;
+}
+
+}  // namespace
+
 std::optional<DeviceInfo> describeFilesystemDevice(
     const fs::path& mountPoint) {
     std::error_code ec;
@@ -374,12 +440,16 @@ std::optional<DeviceInfo> describeFilesystemDevice(
     for (const fs::path& candidate :
          {fs::path("MUSIC"), fs::path("Music"), fs::path("music"),
           fs::path("Storage Media") / "Music"}) {
-        ec.clear();
-        if (fs::is_directory(mountPoint / candidate, ec)) {
+        if (hasExactDirectory(mountPoint, candidate)) {
             musicDirectory = candidate;
             break;
         }
     }
+
+    const UsbDeviceIdentity usb = usbIdentityForMount(mountPoint);
+    const FilesystemProfile* profile = matchFilesystemProfile(mountPoint, usb);
+    if (musicDirectory.empty() && profile)
+        musicDirectory = profile->defaultMusicDirectory;
     if (musicDirectory.empty()) return std::nullopt;
 
     DeviceInfo info;
@@ -387,24 +457,41 @@ std::optional<DeviceInfo> describeFilesystemDevice(
     info.mountPoint = mountPoint;
     info.musicDirectory = musicDirectory;
     info.volumeName = mountPoint.filename().string();
+    info.usbVendorId = usb.vendorId;
+    info.usbProductId = usb.productId;
 
     std::string lowerName = info.volumeName;
     std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(),
                    [](unsigned char c) { return char(std::tolower(c)); });
-    info.modelName = lowerName.find("walkman") != std::string::npos
-                         ? "Sony Walkman (USB storage)"
-                         : "Filesystem media player";
+    if (profile)
+        info.modelName = profile->modelName;
+    else if (lowerName.find("walkman") != std::string::npos)
+        info.modelName = "Sony Walkman (USB storage)";
+    else
+        info.modelName = "Filesystem media player";
     info.filesystem = detectFilesystem(mountPoint);
-    info.writable = ::access((mountPoint / musicDirectory).c_str(), W_OK) == 0;
+    // A profiled player may not have its music folder yet; it is created on
+    // the first write, so the volume itself must be writable.
+    const fs::path writeCheck = fs::is_directory(mountPoint / musicDirectory, ec)
+                                    ? mountPoint / musicDirectory
+                                    : mountPoint;
+    info.writable = ::access(writeCheck.c_str(), W_OK) == 0;
     info.capabilities = {/*playlists=*/true, /*ratings=*/false,
                          /*playCounts=*/false,
                          /*databaseBackups=*/false};
 
-    // These are the formats PodBox can currently inspect and transfer. Sony
-    // A30/A40/A50-class players support all of them, including FLAC, so the
-    // filesystem profile does not perform the iPod-only FLAC conversion.
-    info.originalExtensions = {".mp3", ".m4a", ".m4b", ".aac", ".wav",
-                               ".aif", ".aiff", ".flac"};
+    if (profile) {
+        info.originalExtensions.insert(profile->originalExtensions.begin(),
+                                       profile->originalExtensions.end());
+        info.maxSampleRate = profile->maxSampleRate;
+    } else {
+        // These are the formats PodBox can currently inspect and transfer.
+        // Sony A30/A40/A50-class players support all of them, including
+        // FLAC, so the filesystem profile does not perform the iPod-only
+        // FLAC conversion.
+        info.originalExtensions = {".mp3", ".m4a", ".m4b", ".aac", ".wav",
+                                   ".aif", ".aiff", ".flac"};
+    }
 
     const fs::space_info space = fs::space(mountPoint, ec);
     if (!ec) {
@@ -430,7 +517,7 @@ std::vector<DeviceInfo> findMediaDevicesAt(const fs::path& volumesRoot) {
         auto device = describeFilesystemDevice(entry.path());
         if (!device) continue;
         // Prefer a player we have managed before, then an explicitly named
-        // Walkman, then the conventional all-caps MUSIC layout. This avoids
+        // Walkman or recognised player, then the conventional all-caps MUSIC layout. This avoids
         // an unrelated external archive with a `Music` folder winning merely
         // because directory iteration happened to return it first.
         int score = 0;
@@ -439,7 +526,8 @@ std::vector<DeviceInfo> findMediaDevicesAt(const fs::path& volumesRoot) {
                            "filesystem-player.tsv",
                        markerError))
             score += 100;
-        if (device->modelName.find("Sony Walkman") != std::string::npos)
+        if (device->modelName.find("Sony Walkman") != std::string::npos ||
+            device->modelName.find("FiiO") != std::string::npos)
             score += 50;
         if (device->musicDirectory == fs::path("MUSIC")) score += 10;
         filesystemDevices.emplace_back(score, std::move(*device));

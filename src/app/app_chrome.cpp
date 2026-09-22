@@ -855,6 +855,31 @@ void App::drawColumnBrowser(float width) {
                 pal::BrowserBorder);
 }
 
+bool App::drawImportFormatChoices(const DeviceInfo& dev) {
+    // Only conversions whose output this device plays are offered. The
+    // choice itself is kept, so returning to a device that supports it
+    // restores it.
+    const ImportFormat before = currentImportFormat();
+    int fmt = int(before);
+    const struct {
+        ImportFormat format;
+        const char* label;
+    } options[] = {
+        {ImportFormat::Original, "Keep original format"},
+        {ImportFormat::Alac, "Convert everything to Apple Lossless (ALAC)"},
+        {ImportFormat::Mp3, mp3Available_
+                                ? "Convert everything to MP3 (320 kbps)"
+                                : "Convert everything to AAC (256 kbps)"},
+        {ImportFormat::LosslessToAac,
+         "Convert lossless to AAC (256 kbps), keep lossy files"},
+    };
+    for (const auto& option : options)
+        if (importFormatPlayable(option.format, dev.originalExtensions) &&
+            ImGui::RadioButton(option.label, &fmt, int(option.format)))
+            importFormat_ = option.format;
+    return ImportFormat(fmt) != before;
+}
+
 void App::drawDeviceView(const DeviceInfo& dev) {
     ImGui::PushFont(fonts_.uiBold);
     ImGui::TextUnformatted(dev.volumeName.c_str());
@@ -934,16 +959,7 @@ void App::drawDeviceView(const DeviceInfo& dev) {
     ImGui::TextUnformatted("Import format");
     ImGui::PopFont();
     ImGui::Dummy(ImVec2(0, 2));
-    int fmt = int(importFormat_);
-    ImGui::RadioButton("Keep original format", &fmt,
-                       int(ImportFormat::Original));
-    ImGui::RadioButton("Convert everything to Apple Lossless (ALAC)", &fmt,
-                       int(ImportFormat::Alac));
-    ImGui::RadioButton(mp3Available_
-                           ? "Convert everything to MP3 (320 kbps)"
-                           : "Convert everything to AAC (256 kbps)",
-                       &fmt, int(ImportFormat::Mp3));
-    importFormat_ = ImportFormat(fmt);
+    if (drawImportFormatChoices(dev)) syncUi_.dirty = true;
 
     ImGui::PushFont(fonts_.label);
     if (dev.isIpod())
@@ -951,6 +967,13 @@ void App::drawDeviceView(const DeviceInfo& dev) {
             v4(pal::TextDim),
             "Drag songs onto the window to add them. FLAC is always "
             "converted so it plays on the iPod.");
+    else if (dev.maxSampleRate > 0)
+        ImGui::TextColored(
+            v4(pal::TextDim),
+            "Supported formats are copied unchanged into readable "
+            "Artist/Album folders. Files above %u kHz are converted so "
+            "they play on this player.",
+            unsigned(dev.maxSampleRate / 1000));
     else
         ImGui::TextColored(
             v4(pal::TextDim),

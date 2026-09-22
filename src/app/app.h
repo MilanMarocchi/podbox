@@ -157,6 +157,12 @@ private:
     void finishPendingDeviceCopy();
     bool connectedIpod() const;
     ImportTarget currentImportTarget() const;
+    // importFormat_, or Original when the active device cannot play what the
+    // chosen conversion produces.
+    ImportFormat currentImportFormat() const;
+    // Radio buttons for the conversions `dev` can play. Returns true when the
+    // choice changed, so callers can re-plan a sync.
+    bool drawImportFormatChoices(const DeviceInfo& dev);
     bool restoreSupported() const;
     void drawRestoreModal();
     void openRecovery();

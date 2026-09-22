@@ -2,6 +2,8 @@
 
 #include "library/metadata.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 
 namespace fs = std::filesystem;
@@ -68,6 +70,50 @@ bool toAlac(const fs::path& src, const fs::path& dest) {
     return ok;
 }
 
+bool aacAudioToolboxAvailable() {
+    static const bool available =
+        haveTool("ffmpeg") &&
+        run("ffmpeg -hide_banner -encoders | grep -q ' aac_at '");
+    return available;
+}
+
+// AAC at 256 kbps constrained VBR, the iTunes Plus setting. Tags and cover
+// art come across so the player's own library can file the song, and hi-res
+// sources come down to 48 kHz or below, which every player decodes.
+bool toAac(const fs::path& src, const fs::path& dest) {
+    const FileMeta meta = readFileMetadata(src);
+    const std::uint32_t sourceRate = meta.ok ? meta.track.sampleRate : 0;
+    const int rate = alacSampleRate(sourceRate);
+    const std::string resample =
+        sourceRate > 48000 ? " -ar " + std::to_string(rate) : "";
+
+    if (haveTool("ffmpeg")) {
+        // Apple's encoder is noticeably better than ffmpeg's native one at
+        // the same bitrate; the native one is the fallback off macOS.
+        const std::string encoder = aacAudioToolboxAvailable()
+                                        ? "aac_at -aac_at_mode cvbr"
+                                        : "aac";
+        const std::string head = "ffmpeg -y -v error -i " +
+                                 shellQuote(src.string()) + " -map 0:a:0";
+        const std::string audio =
+            " -codec:a " + encoder + " -b:a 256k" + resample;
+        if (run(head + " -map '0:v:0?'" + audio +
+                " -codec:v copy -disposition:v:0 attached_pic " +
+                shellQuote(dest.string())))
+            return true;
+        // MP4 only carries JPEG/PNG cover art; drop anything else.
+        return run(head + audio + " -vn " + shellQuote(dest.string()));
+    }
+
+    if (!run("/usr/bin/afconvert -f m4af -d aac@" + std::to_string(rate) +
+             " -b 256000 -s 2 " + shellQuote(src.string()) + " " +
+             shellQuote(dest.string())))
+        return false;
+    // afconvert carries no tags over; without them every song would be
+    // filed under its filename.
+    return !meta.ok || writeFileTags(dest, meta.track, nullptr);
+}
+
 bool toMp3(const fs::path& src, const fs::path& dest) {
     if (haveTool("ffmpeg"))
         return run("ffmpeg -y -i " + shellQuote(src.string()) +
@@ -79,11 +125,82 @@ bool toMp3(const fs::path& src, const fs::path& dest) {
     return false;
 }
 
+constexpr std::uint32_t kAacKbps = 256;
+// Above this a lossless file is worth re-encoding; below it (speech, mono
+// or low-rate recordings) AAC 256 would not save anything.
+constexpr std::uint32_t kLosslessToAacMinKbps = 320;
+
+std::uint32_t sourceBitrateKbps(const fs::path& src) {
+    const FileMeta meta = readFileMetadata(src);
+    return meta.ok ? meta.track.bitrate : 0;
+}
+
 }  // namespace
 
 bool mp3EncoderAvailable() {
     static const bool available = haveTool("ffmpeg") || haveTool("lame");
     return available;
+}
+
+bool devicePlaysOriginal(const std::unordered_set<std::string>& playable,
+                         std::uint32_t maxSampleRate, const fs::path& src,
+                         std::uint32_t sampleRate) {
+    std::string ext = src.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    return playable.count(ext) > 0 &&
+           (maxSampleRate == 0 || sampleRate <= maxSampleRate);
+}
+
+bool losslessToAacConverts(const fs::path& src, std::uint32_t bitrateKbps,
+                           bool originalSupported) {
+    if (!originalSupported) return true;
+    // An unknown bitrate is treated as worth converting, as for any FLAC.
+    return isLosslessAudioFile(src) &&
+           (bitrateKbps == 0 || bitrateKbps > kLosslessToAacMinKbps);
+}
+
+std::uint64_t estimateImportBytes(ImportFormat fmt, const fs::path& src,
+                                  const Track& meta, std::uint64_t sourceBytes,
+                                  bool originalSupported) {
+    const double seconds = meta.lengthMs / 1000.0;
+    auto atKbps = [&](double kbps) -> std::uint64_t {
+        return seconds > 0 ? std::uint64_t(seconds * kbps * 1000 / 8)
+                           : sourceBytes;
+    };
+    // 16-bit stereo at the capped rate; ALAC typically lands near 60% of PCM.
+    auto alac = [&] {
+        const double rate = alacSampleRate(meta.sampleRate);
+        return atKbps(rate * 2 * 16 / 1000 * 0.6);
+    };
+    switch (fmt) {
+        case ImportFormat::Alac:
+            return alac();
+        case ImportFormat::Mp3:
+            return atKbps(mp3EncoderAvailable() ? 322 : kAacKbps + 8);
+        case ImportFormat::LosslessToAac:
+            // Constrained VBR runs a little over its target, plus container.
+            return losslessToAacConverts(src, meta.bitrate, originalSupported)
+                       ? atKbps(kAacKbps + 8)
+                       : sourceBytes;
+        case ImportFormat::Original:
+        default:
+            return originalSupported ? sourceBytes : alac();
+    }
+}
+
+bool importFormatPlayable(ImportFormat fmt,
+                          const std::unordered_set<std::string>& playable) {
+    switch (fmt) {
+        case ImportFormat::Alac:
+        case ImportFormat::LosslessToAac:
+            return playable.count(".m4a") > 0;
+        case ImportFormat::Mp3:
+            return playable.count(mp3EncoderAvailable() ? ".mp3" : ".m4a") > 0;
+        case ImportFormat::Original:
+        default:
+            return true;
+    }
 }
 
 std::string importExtension(ImportFormat fmt, const fs::path& src) {
@@ -97,6 +214,11 @@ std::string importExtension(ImportFormat fmt, const fs::path& src,
             return ".m4a";
         case ImportFormat::Mp3:
             return mp3EncoderAvailable() ? ".mp3" : ".m4a";  // AAC fallback
+        case ImportFormat::LosslessToAac:
+            return losslessToAacConverts(src, sourceBitrateKbps(src),
+                                         originalSupported)
+                       ? ".m4a"
+                       : src.extension().string();
         case ImportFormat::Original:
         default:
             // Playable formats keep their extension; anything else (FLAC) is
@@ -123,6 +245,13 @@ bool importAudio(ImportFormat fmt, const fs::path& src, const fs::path& dest,
                 ok = toMp3(src, dest);
             else
                 ok = afconvert(src, dest, "aac");  // guaranteed fallback
+            break;
+        case ImportFormat::LosslessToAac:
+            if (losslessToAacConverts(src, sourceBitrateKbps(src),
+                                      originalSupported))
+                ok = toAac(src, dest);
+            else
+                ok = fs::copy_file(src, dest, ec) && !ec;
             break;
         case ImportFormat::Original:
         default:

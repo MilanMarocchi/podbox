@@ -87,7 +87,13 @@ SyncPlan planSync(const HostLibrary& host, const Library& device,
         if (!key.empty()) queuedKeys.insert(key);
         if (h.fp.ok()) queuedHashes.insert(h.fp.hash);
         plan.toCopy.push_back(h.id);
-        plan.bytesToCopy += h.size;
+        const bool originalSupported =
+            options.playableExtensions.empty() ||
+            devicePlaysOriginal(options.playableExtensions,
+                                options.maxSampleRate, h.file,
+                                h.meta.sampleRate);
+        plan.bytesToCopy += estimateImportBytes(options.format, h.file, h.meta,
+                                                h.size, originalSupported);
     }
 
     if (options.removeFromDevice) {

@@ -577,6 +577,14 @@ void App::refreshSyncPlan() {
     syncUi_.dirty = false;
     syncUi_.plan = {};
     if (!library_) return;
+    // Size the plan by what will actually be written, not the originals.
+    syncUi_.options.format = currentImportFormat();
+    syncUi_.options.playableExtensions.clear();
+    syncUi_.options.maxSampleRate = 0;
+    if (const DeviceInfo* dev = activeDevice()) {
+        syncUi_.options.playableExtensions = dev->originalExtensions;
+        syncUi_.options.maxSampleRate = dev->maxSampleRate;
+    }
     syncPlanJob_.start([host = host_, device = static_cast<const DeviceSession&>(*this), options = syncUi_.options] {
         return planSync(host, *device.library_, device.fingerprints_, device.loadedMount_, options,
                         device.connectedIpod() ? nullptr : &device.managedFilesystemTrackIds_);
@@ -627,7 +635,7 @@ void App::startSync() {
             fp && fp->ok())
             guard.hashes.insert(fp->hash);
 
-    sync_.queueAdds(files, currentImportTarget(), importFormat_,
+    sync_.queueAdds(files, currentImportTarget(), currentImportFormat(),
                     std::move(guard));
     setStatus("Syncing " + plural(int(files.size()), "song", "songs") +
               " to the player…");
@@ -670,13 +678,19 @@ void App::drawSyncModal() {
                    plural(int(syncUi_.plan.missingDeviceFiles.size()),
                           "song file is", "song files are")
                        .c_str());
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Import format");
+    if (const DeviceInfo* formatDevice = activeDevice();
+        formatDevice && drawImportFormatChoices(*formatDevice))
+        syncUi_.dirty = true;
     aqua::body(
         fonts_,
         connectedIpod()
             ? "FLAC and other lossless files are converted to 16-bit Apple "
-              "Lossless so the iPod can play them."
-            : "Formats supported by this player, including FLAC, stay "
-              "unchanged when Keep original format is selected.");
+              "Lossless so the iPod can play them. Sizes are estimated "
+              "after conversion."
+            : "Files this player cannot play are converted. Sizes are "
+              "estimated after conversion.");
 
     ImGui::Spacing();
     if (ImGui::Checkbox(connectedIpod()

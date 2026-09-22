@@ -23,10 +23,14 @@ fs::path manifestPath(const fs::path& mount) {
     return mount / ".podbox" / "filesystem-player.tsv";
 }
 
+// Purely lexical: every path here is built from `mount`. Resolving through
+// the filesystem would return whichever capitalisation FAT's name cache holds
+// ("MUSIC" vs "Music"), so a location would change with lookup history.
 std::string relativeLocation(const fs::path& mount, const fs::path& path) {
-    std::error_code ec;
-    const fs::path relative = fs::relative(path, mount, ec);
-    return ec ? std::string() : relative.generic_string();
+    const fs::path relative =
+        path.lexically_normal().lexically_relative(mount.lexically_normal());
+    if (relative.empty() || *relative.begin() == "..") return {};
+    return relative.generic_string();
 }
 
 std::string pathKey(std::string path) {
@@ -138,6 +142,37 @@ std::uint64_t stableId(const std::string& kind, const std::string& value) {
     return hash ? hash : 1;
 }
 
+// macOS tags every file it creates with extended attributes (at least
+// com.apple.provenance). FAT and exFAT cannot hold them, so the kernel writes
+// a "._name" AppleDouble companion beside each file and folder, and player
+// firmware lists those as broken tracks. Remove a companion only when its
+// real file is beside it, as `dot_clean -m` would.
+void removeAppleDoubleFiles(const fs::path& root) {
+    std::error_code ec;
+    std::vector<fs::path> companions;
+    for (auto it = fs::recursive_directory_iterator(root, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        const std::string name = it->path().filename().string();
+        if (name.size() <= 2 || name.rfind("._", 0) != 0) continue;
+        std::error_code existsError;
+        if (fs::exists(it->path().parent_path() / name.substr(2), existsError))
+            companions.push_back(it->path());
+    }
+    for (const fs::path& companion : companions) fs::remove(companion, ec);
+}
+
+// The folders PodBox creates get companions beside them too, e.g. "._Music"
+// at the volume root.
+void removeAppleDoubleFolderCompanions(const fs::path& mount,
+                                       const fs::path& relative) {
+    fs::path current = mount;
+    for (const fs::path& component : relative) {
+        std::error_code ec;
+        fs::remove(current / ("._" + component.string()), ec);
+        current /= component;
+    }
+}
+
 }  // namespace
 
 std::uint64_t filesystemTrackDbid(const std::string& location) {
@@ -156,8 +191,16 @@ FilesystemPlayerLoad loadFilesystemPlayer(
 
     const fs::path musicRoot = mount / musicDirectory;
     std::error_code ec;
+    if (!fs::is_directory(mount, ec)) {
+        result.error = "The player is no longer mounted";
+        return result;
+    }
+    // A recognised player may not have a music folder until the first sync
+    // creates one; that is an empty library, not a failure.
     if (!fs::is_directory(musicRoot, ec)) {
-        result.error = "The player's music folder is missing";
+        state->managedTracks.clear();
+        state->playlistLocations.clear();
+        result.library = Library{};
         return result;
     }
 
@@ -166,6 +209,9 @@ FilesystemPlayerLoad loadFilesystemPlayer(
     for (const auto& entry : fs::recursive_directory_iterator(musicRoot, ec)) {
         if (ec) break;
         if (!entry.is_regular_file(ec)) continue;
+        // macOS leaves AppleDouble "._name" companions on FAT volumes; they
+        // share the audio extension but hold no audio.
+        if (entry.path().filename().string().rfind("._", 0) == 0) continue;
         if (isImportableAudioFile(entry.path()))
             audioFiles.push_back(entry.path());
         else if (playlistFile(entry.path()))
@@ -178,6 +224,14 @@ FilesystemPlayerLoad loadFilesystemPlayer(
     }
     std::sort(audioFiles.begin(), audioFiles.end());
     std::sort(playlistFiles.begin(), playlistFiles.end());
+
+    // FAT is case-insensitive, so a manifest written as "Music/..." still
+    // owns "MUSIC/...". Match by key and adopt the scanned spelling so later
+    // exact comparisons (deletion, re-import) agree with it.
+    std::unordered_map<std::string, std::string> managedByKey;
+    for (const std::string& location : state->managedTracks)
+        managedByKey.emplace(pathKey(location), location);
+    state->managedTracks.clear();
 
     Library library;
     std::unordered_map<std::string, std::uint32_t> idByPath;
@@ -198,18 +252,21 @@ FilesystemPlayerLoad loadFilesystemPlayer(
         }
         track.dbid = filesystemTrackDbid(track.location);
         idByPath[pathKey(path)] = track.id;
-        if (state->managedTracks.count(track.location))
+        if (managedByKey.erase(pathKey(track.location))) {
+            state->managedTracks.insert(track.location);
             result.managedTrackIds.insert(track.id);
+        }
         library.tracks.push_back(std::move(track));
     }
 
     // A managed path whose file vanished no longer grants deletion authority
     // over anything. The host library will naturally queue a replacement
     // because the missing file was not scanned into `library`.
-    std::erase_if(state->managedTracks, [&](const std::string& location) {
+    for (const auto& [key, location] : managedByKey) {
         std::error_code existsError;
-        return !fs::is_regular_file(mount / fs::path(location), existsError);
-    });
+        if (fs::is_regular_file(mount / fs::path(location), existsError))
+            state->managedTracks.insert(location);
+    }
 
     std::unordered_map<std::string, std::uint64_t> playlistIdByLocation;
     for (const auto& [dbid, location] : state->playlistLocations)
@@ -400,7 +457,13 @@ bool saveFilesystemPlayer(const fs::path& mount,
         std::error_code existsError;
         return !fs::is_regular_file(mount / fs::path(location), existsError);
     });
-    return saveState(mount, *state, error);
+    if (!saveState(mount, *state, error)) return false;
+    // Also clears companions of files copied since the last save.
+    removeAppleDoubleFiles(musicRoot);
+    removeAppleDoubleFiles(manifestPath(mount).parent_path());
+    removeAppleDoubleFolderCompanions(mount, musicDirectory);
+    removeAppleDoubleFolderCompanions(mount, ".podbox");
+    return true;
 }
 
 }  // namespace podbox

@@ -3,6 +3,7 @@
 #include "itdb/itunesdb.h"
 #include "library/fingerprint_store.h"
 #include "library/host_library.h"
+#include "library/transcode.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -16,6 +17,13 @@ struct SyncOptions {
     // Off by default and deliberately so: taking music off a device is the
     // one step here that cannot be undone by running sync again.
     bool removeFromDevice = false;
+
+    // How songs will be written, so bytesToCopy reflects converted sizes
+    // rather than the Mac's originals. Mirrors ImportTarget; an empty
+    // extension set means every source is copied as-is.
+    ImportFormat format = ImportFormat::Original;
+    std::unordered_set<std::string> playableExtensions;
+    std::uint32_t maxSampleRate = 0;
 };
 
 struct SyncPlan {
@@ -27,7 +35,7 @@ struct SyncPlan {
     // that is still playable.
     std::vector<std::uint32_t> missingDeviceFiles;
 
-    std::uint64_t bytesToCopy = 0;
+    std::uint64_t bytesToCopy = 0;  // after conversion, estimated
     std::uint64_t bytesToFree = 0;
 
     int alreadyOnDevice = 0;

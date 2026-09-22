@@ -17,12 +17,28 @@ iTunes required.** Built in C++ with
   or `Storage Media/Music` is treated as a folder-based player. This targets
   USB-storage Sony Walkman families and gives other DAPs and prepared microSD
   cards a conservative generic profile.
+- **FiiO Snowsky Echo.** Recognised by its USB ID (or FiiO's `About
+  FIIO.txt`) even before it has a music folder; PodBox creates `Music` on the
+  first sync. Internal storage and the microSD card appear as separate rows.
+  `.m4b` files follow the import format's conversion because the Echo does
+  not play them, and neither does anything above 48 kHz (24-bit/48 kHz FLAC
+  plays; 96 and 192 kHz do not), so those are converted even under Keep
+  original format.
+- **Space-saving sync.** "Convert lossless to AAC (256 kbps), keep lossy
+  files" re-encodes FLAC/WAV/AIFF/ALAC with Apple's AAC encoder (via ffmpeg,
+  keeping tags and cover art) and copies MP3/AAC unchanged. The import format
+  list only offers conversions the selected player can play, and the sync
+  dialog sizes a sync by what will actually be written.
+- **FAT-safe writes.** macOS leaves `._` AppleDouble files on FAT volumes;
+  PodBox reads tags read-only and removes the companions of files it wrote,
+  so players do not list them as broken tracks.
 - **Readable storage.** New files use
   `MUSIC/Artist/Album/01 - Title.ext` rather than iPod-style scrambled names.
   Existing tagged audio is indexed in place with TagLib.
 - **Native FLAC.** The filesystem-player profile keeps every currently
-  accepted format unchanged, including FLAC. Conversion remains available as
-  an explicit import setting.
+  accepted format unchanged, including FLAC, unless a player profile knows
+  its firmware cannot play it. Conversion remains available as an explicit
+  import setting.
 - **M3U/M3U8 playlists.** Existing playlists are read using paths relative to
   the playlist file. Untouched playlists remain byte-for-byte unchanged;
   playlists created or edited by PodBox are written as portable UTF-8 M3U8.

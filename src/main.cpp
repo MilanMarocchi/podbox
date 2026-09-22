@@ -12,9 +12,37 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
+namespace {
+
+// Finder launches apps with PATH=/usr/bin:/bin:/usr/sbin:/sbin, which hides
+// the ffmpeg/lame that MP3 and AAC conversion shell out to. Append the usual
+// package-manager locations; a PATH set by a terminal launch still wins.
+void addToolDirectoriesToPath() {
+    std::string path = std::getenv("PATH") ? std::getenv("PATH") : "";
+    const char* home = std::getenv("HOME");
+    const std::string dirs[] = {
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/opt/local/bin",
+        home ? std::string(home) + "/.nix-profile/bin" : std::string(),
+        "/run/current-system/sw/bin",
+    };
+    for (const std::string& dir : dirs) {
+        if (dir.empty() ||
+            (":" + path + ":").find(":" + dir + ":") != std::string::npos)
+            continue;
+        path += path.empty() ? dir : ":" + dir;
+    }
+    setenv("PATH", path.c_str(), 1);
+}
+
+}  // namespace
+
 int main() {
+    addToolDirectoriesToPath();
     glfwSetErrorCallback([](int code, const char* desc) {
         std::fprintf(stderr, "GLFW error %d: %s\n", code, desc);
     });

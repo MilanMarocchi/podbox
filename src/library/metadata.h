@@ -14,6 +14,10 @@ bool isSupportedAudioFile(const std::filesystem::path& path);
 // transcode to a playable one (FLAC).
 bool isImportableAudioFile(const std::filesystem::path& path);
 
+// True when the audio is stored losslessly: FLAC, WAV, AIFF, or ALAC in an
+// MP4 container. Lossy files are never worth re-encoding to save space.
+bool isLosslessAudioFile(const std::filesystem::path& path);
+
 // How a file should be filed on the iPod, from its extension and genre.
 // Separate from readFileMetadata so it can be tested without an audio file,
 // and so Get Info can re-derive it after a genre edit.

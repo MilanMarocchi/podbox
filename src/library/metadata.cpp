@@ -1,7 +1,9 @@
 #include "library/metadata.h"
 
 #include <fileref.h>
+#include <mp4file.h>
 #include <tag.h>
+#include <tfilestream.h>
 
 #include <algorithm>
 #include <ctime>
@@ -36,6 +38,17 @@ bool isImportableAudioFile(const fs::path& path) {
     return isSupportedAudioFile(path) || lowerExt(path) == ".flac";
 }
 
+bool isLosslessAudioFile(const fs::path& path) {
+    const std::string ext = lowerExt(path);
+    if (ext == ".flac" || ext == ".wav" || ext == ".aif" || ext == ".aiff")
+        return true;
+    if (ext != ".m4a" && ext != ".m4b") return false;
+    TagLib::FileStream stream(path.c_str(), /*openReadOnly=*/true);
+    TagLib::MP4::File f(&stream, true, TagLib::MP4::Properties::Fast);
+    return f.isValid() && f.audioProperties() &&
+           f.audioProperties()->codec() == TagLib::MP4::Properties::ALAC;
+}
+
 std::uint32_t classifyMediaType(const fs::path& path,
                                 const std::string& genre) {
     if (lowerExt(path) == ".m4b") return kMediaAudiobook;
@@ -55,8 +68,11 @@ FileMeta readFileMetadata(const fs::path& path) {
         return out;
     }
 
-    TagLib::FileRef f(path.c_str(), true,
-                      TagLib::AudioProperties::Average);
+    // Read-only on purpose: opening for write makes macOS tag the file with
+    // com.apple.provenance, which on a FAT player becomes a "._" companion
+    // file the firmware lists as a broken track. The stream must outlive f.
+    TagLib::FileStream stream(path.c_str(), /*openReadOnly=*/true);
+    TagLib::FileRef f(&stream, true, TagLib::AudioProperties::Average);
     if (f.isNull() || !f.audioProperties()) {
         out.error = path.filename().string() + ": could not read audio file";
         return out;

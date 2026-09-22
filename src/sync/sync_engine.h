@@ -45,6 +45,7 @@ struct ImportTarget {
     std::filesystem::path musicDirectory;
     DeviceMusicLayout layout = DeviceMusicLayout::IpodFolders;
     std::unordered_set<std::string> originalExtensions;
+    std::uint32_t maxSampleRate = 0;  // 0: no known limit
 };
 
 // Copies queued audio files onto the device on a worker thread and reads
