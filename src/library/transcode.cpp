@@ -6,6 +6,9 @@
 #include <cctype>
 #include <cstdlib>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 namespace fs = std::filesystem;
 
 namespace podbox {
@@ -135,7 +138,54 @@ std::uint32_t sourceBitrateKbps(const fs::path& src) {
     return meta.ok ? meta.track.bitrate : 0;
 }
 
+// Hidden, and the real extension stays last so ffmpeg and afconvert still
+// pick the container from it.
+constexpr const char* kPartialPrefix = ".podbox-partial.";
+
+fs::path partialPath(const fs::path& dest) {
+    return dest.parent_path() / (kPartialPrefix + dest.filename().string());
+}
+
+// Pushes a file's data out to the device. On macOS plain fsync() only
+// reaches the drive's cache; F_FULLFSYNC asks the drive to commit it, and
+// not every USB bridge supports it, so fall back to fsync().
+bool flushToDisk(const fs::path& path) {
+    const int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) return false;
+    bool ok = false;
+#ifdef F_FULLFSYNC
+    ok = ::fcntl(fd, F_FULLFSYNC) == 0;
+#endif
+    if (!ok) ok = ::fsync(fd) == 0;
+    return ::close(fd) == 0 && ok;
+}
+
+bool writeImport(ImportFormat fmt, const fs::path& src, const fs::path& dest,
+                 bool originalSupported) {
+    std::error_code ec;
+    switch (fmt) {
+        case ImportFormat::Alac:
+            return toAlac(src, dest);
+        case ImportFormat::Mp3:
+            if (mp3EncoderAvailable()) return toMp3(src, dest);
+            return afconvert(src, dest, "aac");  // guaranteed fallback
+        case ImportFormat::LosslessToAac:
+            if (losslessToAacConverts(src, sourceBitrateKbps(src),
+                                      originalSupported))
+                return toAac(src, dest);
+            return fs::copy_file(src, dest, ec) && !ec;
+        case ImportFormat::Original:
+        default:
+            if (originalSupported) return fs::copy_file(src, dest, ec) && !ec;
+            return toAlac(src, dest);
+    }
+}
+
 }  // namespace
+
+bool isPartialImport(const fs::path& path) {
+    return path.filename().string().rfind(kPartialPrefix, 0) == 0;
+}
 
 bool mp3EncoderAvailable() {
     static const bool available = haveTool("ffmpeg") || haveTool("lame");
@@ -234,35 +284,20 @@ bool importAudio(ImportFormat fmt, const fs::path& src, const fs::path& dest,
 
 bool importAudio(ImportFormat fmt, const fs::path& src, const fs::path& dest,
                  std::string* error, bool originalSupported) {
+    const fs::path partial = partialPath(dest);
     std::error_code ec;
-    bool ok = false;
-    switch (fmt) {
-        case ImportFormat::Alac:
-            ok = toAlac(src, dest);
-            break;
-        case ImportFormat::Mp3:
-            if (mp3EncoderAvailable())
-                ok = toMp3(src, dest);
-            else
-                ok = afconvert(src, dest, "aac");  // guaranteed fallback
-            break;
-        case ImportFormat::LosslessToAac:
-            if (losslessToAacConverts(src, sourceBitrateKbps(src),
-                                      originalSupported))
-                ok = toAac(src, dest);
-            else
-                ok = fs::copy_file(src, dest, ec) && !ec;
-            break;
-        case ImportFormat::Original:
-        default:
-            if (originalSupported)
-                ok = fs::copy_file(src, dest, ec) && !ec;
-            else
-                ok = toAlac(src, dest);
-            break;
+    fs::remove(partial, ec);  // left by an earlier, interrupted import
+    bool ok = writeImport(fmt, src, partial, originalSupported) &&
+              flushToDisk(partial);
+    if (ok) {
+        fs::rename(partial, dest, ec);
+        ok = !ec;
     }
-    if (!ok && error)
-        *error = src.filename().string() + ": import/conversion failed";
+    if (!ok) {
+        fs::remove(partial, ec);
+        if (error)
+            *error = src.filename().string() + ": import/conversion failed";
+    }
     return ok;
 }
 

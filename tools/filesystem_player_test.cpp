@@ -235,6 +235,7 @@ int main() {
     fs::create_directories(echo / "Music", ec);
     writeWav(echo / "Music" / "song.wav");
     std::ofstream(echo / "Music" / "._song.wav") << "AppleDouble";
+    writeWav(echo / "Music" / ".podbox-partial.cut off.wav");
     FilesystemPlayerState echoReloadState;
     const FilesystemPlayerLoad echoReload =
         loadFilesystemPlayer(echo, "Music", &echoReloadState);
@@ -242,7 +243,7 @@ int main() {
           "AppleDouble companions are not reported as unreadable");
     if (echoReload.library)
         check(echoReload.library->tracks.size() == 1,
-              "AppleDouble companions are not indexed as tracks");
+              "AppleDouble companions and partial imports are not indexed");
     std::ofstream(echo / "Music" / "._orphan") << "not a companion";
     if (echoReload.library) {
         check(saveFilesystemPlayer(echo, "Music", *echoReload.library,
@@ -252,6 +253,31 @@ int main() {
               "saving removes AppleDouble companions from FAT players");
         check(fs::exists(echo / "Music" / "._orphan"),
               "a ._ file without a companion target is left alone");
+        check(!fs::exists(echo / "Music" / ".podbox-partial.cut off.wav"),
+              "saving removes an import abandoned mid-write");
+    }
+
+    std::printf("imports land whole or not at all\n");
+    {
+        const fs::path source = mount.parent_path() / "import source.wav";
+        writeWav(source);
+        const fs::path dest = echo / "Music" / "imported.wav";
+        std::string importError;
+        check(importAudio(ImportFormat::Original, source, dest, &importError,
+                          true),
+              "an import copies: " + importError);
+        check(readAll(dest) == readAll(source), "the import is complete");
+        check(!fs::exists(echo / "Music" / ".podbox-partial.imported.wav"),
+              "a finished import leaves no partial file");
+
+        const fs::path failedDest = echo / "Music" / "failed.wav";
+        check(!importAudio(ImportFormat::Original,
+                           mount.parent_path() / "missing.wav", failedDest,
+                           &importError, true),
+              "an import of a missing file fails");
+        check(!fs::exists(failedDest) &&
+                  !fs::exists(echo / "Music" / ".podbox-partial.failed.wav"),
+              "a failed import leaves nothing behind");
     }
 
     std::printf("case-insensitive volumes\n");

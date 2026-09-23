@@ -2,6 +2,7 @@
 
 #include "library/dedupe.h"
 #include "library/metadata.h"
+#include "library/transcode.h"
 
 #include <algorithm>
 #include <cctype>
@@ -192,11 +193,18 @@ void removeCompanion(const fs::path& companion) {
 // a "._name" AppleDouble companion beside each file and folder, and player
 // firmware lists those as broken tracks. Remove a companion only when its
 // real file is beside it, as `dot_clean -m` would.
+//
+// Also removes imports abandoned mid-write, which the firmware would list as
+// broken tracks too. Saves never run while a sync is still importing.
 void removeAppleDoubleFiles(const fs::path& root) {
     std::error_code ec;
     std::vector<fs::path> companions;
     for (auto it = fs::recursive_directory_iterator(root, ec);
          !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (isPartialImport(it->path())) {
+            companions.push_back(it->path());
+            continue;
+        }
         const std::string name = it->path().filename().string();
         if (name.size() <= 2 || name.rfind("._", 0) != 0) continue;
         std::error_code existsError;
@@ -258,6 +266,7 @@ FilesystemPlayerLoad loadFilesystemPlayer(
         // macOS leaves AppleDouble "._name" companions on FAT volumes; they
         // share the audio extension but hold no audio.
         if (entry.path().filename().string().rfind("._", 0) == 0) continue;
+        if (isPartialImport(entry.path())) continue;
         if (isImportableAudioFile(entry.path()))
             audioFiles.push_back(entry.path());
         else if (playlistFile(entry.path()))

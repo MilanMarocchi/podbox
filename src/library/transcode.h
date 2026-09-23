@@ -29,11 +29,19 @@ std::string importExtension(ImportFormat fmt,
 
 // Copies or transcodes `src` to `dest` (whose extension must equal
 // importExtension(fmt, src)). Returns false with a message in `error`.
+//
+// The output is written beside `dest` under a partial-import name, flushed
+// to the device, then renamed into place, so an interrupted write (unplug,
+// forced unmount, crash) never leaves a truncated song at `dest`. An MP4's
+// index is written last, so a cut-off .m4a would not play at all.
 bool importAudio(ImportFormat fmt, const std::filesystem::path& src,
                  const std::filesystem::path& dest, std::string* error);
 bool importAudio(ImportFormat fmt, const std::filesystem::path& src,
                  const std::filesystem::path& dest, std::string* error,
                  bool originalSupported);
+
+// Whether `path` is an import still being written (or abandoned mid-write).
+bool isPartialImport(const std::filesystem::path& path);
 
 // True when an MP3 encoder (ffmpeg or lame) is available on this system.
 bool mp3EncoderAvailable();
