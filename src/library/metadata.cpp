@@ -1,9 +1,13 @@
 #include "library/metadata.h"
 
 #include <fileref.h>
+#include <id3v2tag.h>
 #include <mp4file.h>
+#include <mpegfile.h>
 #include <tag.h>
+#include <textidentificationframe.h>
 #include <tfilestream.h>
+#include <tpropertymap.h>
 
 #include <algorithm>
 #include <ctime>
@@ -120,6 +124,52 @@ bool writeFileTags(const fs::path& path, const Track& meta,
     tag->setTrack(meta.trackNumber);
     if (!f.save()) {
         if (error) *error = path.filename().string() + ": could not save tags";
+        return false;
+    }
+    return true;
+}
+
+bool writePlayerSafeMp3Tags(const fs::path& src, const fs::path& dest,
+                            std::string* error) {
+    static const char* const kKeys[] = {"TITLE",       "ARTIST",
+                                        "ALBUM",       "ALBUMARTIST",
+                                        "TRACKNUMBER", "DISCNUMBER",
+                                        "DATE",        "GENRE"};
+    TagLib::PropertyMap wanted;
+    {
+        // Read-only, as in readFileMetadata, so `src` gains no "._" file.
+        TagLib::FileStream stream(src.c_str(), /*openReadOnly=*/true);
+        TagLib::FileRef f(&stream, false);
+        if (!f.isNull()) {
+            const TagLib::PropertyMap all = f.file()->properties();
+            for (const char* key : kKeys) {
+                const auto found = all.find(key);
+                if (found != all.end() && !found->second.isEmpty())
+                    wanted.insert(key, TagLib::StringList(found->second.front()));
+            }
+        }
+    }
+
+    TagLib::MPEG::File f(dest.c_str(), false);
+    if (!f.isValid()) {
+        if (error) *error = dest.filename().string() + ": not a readable MP3";
+        return false;
+    }
+    // Emptying the existing tag rather than stripping it keeps its space on
+    // disk, so the smaller replacement is written in place.
+    TagLib::ID3v2::Tag* tag = f.ID3v2Tag(true);
+    // Not via a copy of frameList(): the copy shares the tag's
+    // auto-deleting list and would free each frame a second time.
+    while (!tag->frameList().isEmpty())
+        tag->removeFrame(tag->frameList().front());
+    tag->setProperties(wanted);
+    for (TagLib::ID3v2::Frame* frame : tag->frameList())
+        if (auto* text =
+                dynamic_cast<TagLib::ID3v2::TextIdentificationFrame*>(frame))
+            text->setTextEncoding(TagLib::String::UTF16);
+    if (!f.save(TagLib::MPEG::File::ID3v2, TagLib::File::StripOthers,
+                TagLib::ID3v2::v3, TagLib::File::DoNotDuplicate)) {
+        if (error) *error = dest.filename().string() + ": could not save tags";
         return false;
     }
     return true;

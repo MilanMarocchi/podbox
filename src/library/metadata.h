@@ -44,4 +44,15 @@ FileMeta readFileMetadata(const std::filesystem::path& path);
 bool writeFileTags(const std::filesystem::path& path, const Track& meta,
                    std::string* error);
 
+// Replaces the tags of the MP3 at `dest` with the ones players display
+// (title, artists, album, track, disc, year, genre) read from `src`, which may
+// be the same file or any format TagLib reads. Written as ID3v2.3 with UTF-16
+// text and nothing else: budget player firmware (the Snowsky Echo line) has no
+// UTF-8 decoder, only reads the first few KB of a tag, and crashes on frames
+// it does not expect. Drops artwork. An existing tag is overwritten in place
+// when the new one fits, so this is cheap on a slow device.
+bool writePlayerSafeMp3Tags(const std::filesystem::path& src,
+                            const std::filesystem::path& dest,
+                            std::string* error);
+
 }  // namespace podbox

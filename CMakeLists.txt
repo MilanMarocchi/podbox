@@ -302,6 +302,9 @@ target_link_libraries(itunessd_test PRIVATE podbox_core)
 add_executable(shuffle_repair tools/shuffle_repair.cpp)
 target_link_libraries(shuffle_repair PRIVATE podbox_core)
 
+add_executable(player_retag tools/player_retag.cpp)
+target_link_libraries(player_retag PRIVATE podbox_core)
+
 if(APPLE)
   add_executable(audio_test tools/audio_test.cpp ${PODBOX_AUDIO_SRC})
   target_include_directories(audio_test PRIVATE src)
@@ -342,7 +345,7 @@ if(PODBOX_INSTALL_TOOLS)
   install(TARGETS itdb_dump podbox_add playcounts_test dedupe_test
                   library_test applemusic_test sync_test filesystem_player_test ui_test
                   hash58_test hash72_test hashab_test itunessqlite_test itunessd_test
-                  shuffle_repair
+                  shuffle_repair player_retag
           RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 

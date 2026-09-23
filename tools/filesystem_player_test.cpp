@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -333,8 +334,38 @@ int main() {
         check(importAudio(ImportFormat::Mp3, hiRes, mp3File, &convertError),
               "hi-res WAV converts to MP3: " + convertError);
         const std::string head = readAll(mp3File).substr(0, 4);
-        check(head == std::string("ID3\x03", 4),
-              "converted MP3s carry ID3v2.3 tags, not v2.4");
+        check(head != std::string("ID3\x04", 4),
+              "converted MP3s never carry ffmpeg's ID3v2.4 tags");
+    }
+
+    std::printf("player-safe MP3 tags\n");
+    if (std::system("command -v ffmpeg >/dev/null 2>&1") == 0) {
+        // What ffmpeg writes by default: ID3v2.4, UTF-8, extras as TXXX.
+        const fs::path tagged = mount.parent_path() / "tagged.mp3";
+        const std::string make =
+            "ffmpeg -v error -y -f lavfi -i anullsrc=r=44100:cl=stereo -t 1 "
+            "-codec:a libmp3lame -metadata title='Rivière' "
+            "-metadata artist=Artist -metadata musicbrainz_trackid=08d71655 "
+            "-metadata barcode=199350974793 '" + tagged.string() + "'";
+        check(std::system(make.c_str()) == 0, "ffmpeg makes a tagged MP3");
+        const std::uintmax_t before = fs::file_size(tagged, ec);
+        std::string tagError;
+        check(writePlayerSafeMp3Tags(tagged, tagged, &tagError),
+              "an MP3 is retagged in place: " + tagError);
+        check(fs::file_size(tagged, ec) == before,
+              "a smaller tag is written over the old one without moving audio");
+        const std::string bytes = readAll(tagged);
+        check(bytes.compare(0, 4, std::string("ID3\x03", 4)) == 0,
+              "the tag is ID3v2.3");
+        check(bytes.find("TXXX") == std::string::npos,
+              "MusicBrainz and other extra fields are dropped");
+        // TIT2, then size, flags, encoding 1 (UTF-16 with BOM) and "R".
+        const std::size_t title = bytes.find("TIT2");
+        check(title != std::string::npos &&
+                  bytes.compare(title + 10, 5, std::string("\x01\xff\xfeR\0", 5)) == 0,
+              "the title is kept as UTF-16");
+        check(readFileMetadata(tagged).track.title == "Rivière",
+              "non-ASCII text survives");
     }
 
     std::printf("sync size estimates\n");

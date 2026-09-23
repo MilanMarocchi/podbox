@@ -432,6 +432,7 @@ The build also produces small utilities used for testing. With Nix they are in
 | `itunessqlite_test` | Stages, rewrites, signs and validates a device-like nano 6G/7G companion bundle. |
 | `itunessd_test` | No arguments for regression tests, or `<iTunesDB> <existing-iTunesSD> <output>` to validate a proposed Shuffle database without touching the device. |
 | `shuffle_repair` | `<mount-point>` — transactionally rebuild a 3G/4G Shuffle's `iTunesSD` and `iTunesStats`, synthesize missing VoiceOver, and retain a matched backup of all three databases. This writes to the device. |
+| `player_retag` | `<mount-point>` — rewrite every MP3 on a folder player with player-safe tags (ID3v2.3, UTF-16, displayed fields only) in place, for songs synced before PodBox wrote them that way. The audio is untouched. This writes to the device. |
 
 The assertion-based tools are registered with CTest, so
 `ctest --test-dir build` runs them.

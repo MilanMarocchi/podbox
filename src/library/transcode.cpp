@@ -3,6 +3,7 @@
 #include "library/metadata.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdlib>
 
@@ -117,18 +118,37 @@ bool toAac(const fs::path& src, const fs::path& dest) {
     return !meta.ok || writeFileTags(dest, meta.track, nullptr);
 }
 
-bool toMp3(const fs::path& src, const fs::path& dest) {
-    // ffmpeg defaults to ID3v2.4 tags, which crash the Snowsky Echo's
-    // firmware on playback; v2.3 is what iTunes writes and every player reads.
+bool encodeMp3(const fs::path& src, const fs::path& dest) {
     if (haveTool("ffmpeg"))
         return run("ffmpeg -y -i " + shellQuote(src.string()) +
-                   " -map 0:a:0 -codec:a libmp3lame -b:a 320k"
-                   " -id3v2_version 3 " +
+                   " -map 0:a:0 -map_metadata -1 -codec:a libmp3lame"
+                   " -b:a 320k " +
                    shellQuote(dest.string()));
     if (haveTool("lame"))
         return run("lame -b 320 " + shellQuote(src.string()) + " " +
                    shellQuote(dest.string()));
     return false;
+}
+
+// Encodes and tags on the Mac, then copies to `dest` once: tagging after the
+// fact grows the file's front, which would rewrite it a second time over a
+// slow USB link. ffmpeg's own tags are ID3v2.4 in UTF-8 with every source
+// field as a TXXX frame, which crash the Snowsky Echo's firmware; the tags
+// here are the player-safe subset.
+bool toMp3(const fs::path& src, const fs::path& dest) {
+    static std::atomic<unsigned> serial{0};
+    const fs::path local =
+        fs::temp_directory_path() /
+        ("podbox-" + std::to_string(::getpid()) + "-" +
+         std::to_string(serial++) + ".mp3");
+    std::error_code ec;
+    const bool ok = encodeMp3(src, local) &&
+                    writePlayerSafeMp3Tags(src, local, nullptr) &&
+                    fs::copy_file(local, dest,
+                                  fs::copy_options::overwrite_existing, ec) &&
+                    !ec;
+    fs::remove(local, ec);
+    return ok;
 }
 
 constexpr std::uint32_t kAacKbps = 256;
