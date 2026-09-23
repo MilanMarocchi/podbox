@@ -118,9 +118,12 @@ bool toAac(const fs::path& src, const fs::path& dest) {
 }
 
 bool toMp3(const fs::path& src, const fs::path& dest) {
+    // ffmpeg defaults to ID3v2.4 tags, which crash the Snowsky Echo's
+    // firmware on playback; v2.3 is what iTunes writes and every player reads.
     if (haveTool("ffmpeg"))
         return run("ffmpeg -y -i " + shellQuote(src.string()) +
-                   " -map 0:a:0 -codec:a libmp3lame -b:a 320k " +
+                   " -map 0:a:0 -codec:a libmp3lame -b:a 320k"
+                   " -id3v2_version 3 " +
                    shellQuote(dest.string()));
     if (haveTool("lame"))
         return run("lame -b 320 " + shellQuote(src.string()) + " " +

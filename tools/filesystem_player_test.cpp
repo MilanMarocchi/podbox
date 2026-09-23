@@ -327,6 +327,16 @@ int main() {
           "the converted file is at most 48 kHz");
     check(isLosslessAudioFile(hiRes), "WAV counts as lossless");
 
+    std::printf("MP3 conversion\n");
+    if (mp3EncoderAvailable() && importExtension(ImportFormat::Mp3, hiRes) == ".mp3") {
+        const fs::path mp3File = mount.parent_path() / "hires.mp3";
+        check(importAudio(ImportFormat::Mp3, hiRes, mp3File, &convertError),
+              "hi-res WAV converts to MP3: " + convertError);
+        const std::string head = readAll(mp3File).substr(0, 4);
+        check(head == std::string("ID3\x03", 4),
+              "converted MP3s carry ID3v2.3 tags, not v2.4");
+    }
+
     std::printf("sync size estimates\n");
     Track fourMinutes;
     fourMinutes.lengthMs = 240000;
