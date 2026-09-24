@@ -12,6 +12,7 @@
 #include "library/fingerprint_store.h"
 #include "library/dedupe.h"
 #include "library/applemusic.h"
+#include "library/host_dedupe.h"
 #include "library/host_library.h"
 #include "sync/sync_engine.h"
 #include "sync/sync_plan.h"
@@ -105,6 +106,7 @@ private:
 
     BackgroundJob<SyncPlan> syncPlanJob_;
     BackgroundJob<std::vector<DuplicateGroup>> duplicateJob_;
+    BackgroundJob<HostRemovalResult> hostRemovalJob_;
     std::vector<std::pair<std::filesystem::path, Track>> pendingHostTags_;
     std::filesystem::path artworkPath_, artworkJobPath_;
     std::filesystem::path ejectingMount_;
@@ -140,6 +142,13 @@ private:
     // Where a track's audio actually lives, whichever source it came from.
     std::filesystem::path trackFilePath(const Track& t) const;
     void rebuildHostView();
+    // True while a worker owns the Mac library: a scan or an Apple Music copy
+    // (each swaps a changed copy back in when it finishes), or duplicates on
+    // their way to the Trash. Anything that edits host_ waits for it.
+    bool hostBusy() const {
+        return scan_.running || apple_.copying || hostRemovalJob_.busy();
+    }
+    void revealSelectedHostTracks();
     void rescanWatchFolders();
     void pullPlayCountsToHost();
     void applyFinishedScan();
@@ -190,6 +199,10 @@ private:
     void drawDeleteModal();
     void drawDuplicatesModal();
     void refreshDuplicates();
+    // Sends the ticked groups' extra copies in the Mac library to the Trash
+    // on a worker, then drops them from the library in applyHostRemoval().
+    void startHostRemoval();
+    void applyHostRemoval(const HostRemovalResult& result);
     void startVerifyPass();
     void drawDeletePlaylistModal();
     void setStatus(const std::string& msg);
@@ -375,6 +388,7 @@ private:
     struct DuplicateReview {
         bool open = false;
         bool dirty = false;
+        bool host = false;  // the Mac library rather than the player
         MatchMode mode = MatchMode::Exact;
         bool identicalOnly = false;
         std::vector<DuplicateGroup> groups;

@@ -11,6 +11,7 @@
 #include "library/transcode.h"
 #include "ui/aqua.h"
 #include "ui/theme.h"
+#include "util/finder.h"
 
 #include <imgui.h>
 
@@ -103,12 +104,14 @@ void App::drawFoldersModal() {
     if (!ImGui::IsPopupOpen("Music Folders")) ImGui::OpenPopup("Music Folders");
     if (!aqua::beginSheet("Music Folders", 620.0f)) return;
 
-    aqua::heading(fonts_, "Where should PodBox look for music?");
+    aqua::heading(fonts_, "Where does your music come from?");
     aqua::body(fonts_,
-               "Your files stay where they are and are never modified or "
-               "moved. Folders named “downloading” or "
+               "When PodBox scans, new songs in these folders are copied into "
+               "your library at %s. Nothing in these folders is ever changed, "
+               "moved or deleted. Folders named “downloading” or "
                "“incomplete” are skipped, so part-finished "
-               "downloads are never indexed.");
+               "downloads are never imported.",
+               displayPath(host_.musicFolder()).c_str());
     aqua::divider();
 
     int removeIndex = -1;
@@ -119,9 +122,11 @@ void App::drawFoldersModal() {
         if (ImGui::Checkbox("##on", &on)) host_.setWatchFolderEnabled(i, on);
         ImGui::SameLine();
 
+        std::string prefix = w.path.string();
+        if (prefix.empty() || prefix.back() != '/') prefix += '/';
         int here = 0;
-        for (const HostTrack& t : host_.tracks())
-            if (t.file.string().rfind(w.path.string(), 0) == 0) ++here;
+        for (const std::string& file : host_.importedFiles())
+            if (file.compare(0, prefix.size(), prefix) == 0) ++here;
 
         const auto found = folderExists_.find(w.path.string());
         const bool exists = found == folderExists_.end() || found->second;
@@ -130,11 +135,17 @@ void App::drawFoldersModal() {
             w.path.c_str());
         ImGui::PushFont(fonts_.label);
         ImGui::TextColored(v4(pal::TextDim), "        %s",
-                           exists ? (std::to_string(here) + " songs").c_str()
+                           exists ? (std::to_string(here) + " songs imported").c_str()
                                   : "folder not found — is the drive "
                                     "connected?");
         ImGui::PopFont();
-        ImGui::SameLine(ImGui::GetWindowWidth() - 100);
+        ImGui::SameLine(ImGui::GetWindowWidth() - 226);
+        ImGui::BeginDisabled(!exists);
+        if (aqua::button("Show in Finder", ImVec2(118, 0)) &&
+            !openInFinder(w.path))
+            setStatus("Could not open " + displayPath(w.path));
+        ImGui::EndDisabled();
+        ImGui::SameLine();
         if (aqua::button("Remove", ImVec2(78, 0))) removeIndex = int(i);
         ImGui::PopID();
     }
@@ -162,7 +173,7 @@ void App::drawFoldersModal() {
 
     aqua::divider();
     if (aqua::button("Check for Missing Files", ImVec2(180, 0))) {
-        if (!scan_.running && !apple_.copying) {
+        if (!hostBusy()) {
             if (scan_.thread.joinable()) scan_.thread.join();
             scan_.running = true;
             scan_.finished.store(false);
@@ -209,7 +220,9 @@ void App::startAppleMusicRead() {
 }
 
 void App::startAppleMusicCopy() {
-    if (apple_.busy || scan_.running || apple_.read.tracks.empty()) return;
+    if (apple_.busy || scan_.running || hostRemovalJob_.busy() ||
+        apple_.read.tracks.empty())
+        return;
     if (apple_.thread.joinable()) apple_.thread.join();
     apple_.busy = true;
     apple_.copying = true;
@@ -769,12 +782,52 @@ void App::refreshDuplicates() {
     dupes_.dirty = false;
     dupes_.groups.clear();
     dupes_.enabled.clear();
+    if (dupes_.host) {
+        duplicateJob_.start([host = host_, mode = dupes_.mode,
+                             identical = dupes_.identicalOnly] {
+            auto groups = findHostDuplicates(host, mode);
+            if (identical) std::erase_if(groups, [](const auto& g) { return !g.allIdenticalFiles; });
+            return groups;
+        });
+        return;
+    }
     if (!library_) return;
     duplicateJob_.start([library = *library_, fingerprints = fingerprints_.all(),
                          mode = dupes_.mode, identical = dupes_.identicalOnly] {
         auto groups = findDuplicates(library, mode, fingerprints);
         if (identical) std::erase_if(groups, [](const auto& g) { return !g.allIdenticalFiles; });
         return groups;
+    });
+}
+
+void App::startHostRemoval() {
+    if (hostBusy()) return;
+    std::vector<HostRemoval> items;
+    for (std::size_t i = 0; i < dupes_.groups.size(); ++i) {
+        if (!dupes_.enabled[i]) continue;
+        const auto& ids = dupes_.groups[i].trackIds;
+        const auto keeper = hostIndexById_.find(ids[0]);
+        if (keeper == hostIndexById_.end()) continue;
+        const Track& kept = hostView_.tracks[keeper->second];
+        for (std::size_t k = 1; k < ids.size(); ++k) {
+            const auto it = hostIndexById_.find(ids[k]);
+            if (it == hostIndexById_.end()) continue;
+            const Track& t = hostView_.tracks[it->second];
+            items.push_back({t.dbid, t.location, kept.location});
+        }
+    }
+    if (items.empty()) return;
+
+    // Only the library folder is PodBox's to tidy. The folders it imports
+    // from are never touched; anything outside the library is only unlisted.
+    const fs::path library = host_.musicFolder();
+
+    setStatus("Moving " + plural(int(items.size()), "duplicate", "duplicates") +
+              " to the Trash…");
+    hostRemovalJob_.start([items = std::move(items), library] {
+        HostRemovalResult result = removeHostDuplicates(items, {library}, moveToTrash);
+        pruneEmptyFolders(library);
+        return result;
     });
 }
 
@@ -808,15 +861,27 @@ void App::drawDuplicatesModal() {
     if (!ImGui::IsPopupOpen("Duplicate Songs"))
         ImGui::OpenPopup("Duplicate Songs");
     if (!aqua::beginSheet("Duplicate Songs", 720.0f)) return;
-    if (!library_) {
+    // A player's review ends when the player goes; the Mac library stays.
+    if (!dupes_.host && !library_) {
         dupes_.open = false;
         ImGui::CloseCurrentPopup();
         aqua::endSheet();
         return;
     }
     if (dupes_.dirty) refreshDuplicates();
+    const Library& lib = dupes_.host ? hostView_ : *library_;
+    const auto& index = dupes_.host ? hostIndexById_ : trackIndexById_;
 
-    aqua::heading(fonts_, "Duplicate songs on this player");
+    if (dupes_.host) {
+        aqua::heading(fonts_, "Duplicate songs in your Mac library");
+        aqua::body(fonts_,
+                   "Only songs in %s are checked. The best copy of each is "
+                   "kept — lossless first, then play count — and the others "
+                   "go to the Trash. Your import folders are never touched.",
+                   displayPath(host_.musicFolder()).c_str());
+    } else {
+        aqua::heading(fonts_, "Duplicate songs on this player");
+    }
 
     int mode = int(dupes_.mode);
     if (ImGui::RadioButton("Exact", &mode, int(MatchMode::Exact)))
@@ -833,21 +898,25 @@ void App::drawDuplicatesModal() {
 
     if (ImGui::Checkbox("Only byte-identical copies", &dupes_.identicalOnly))
         dupes_.dirty = true;
-    ImGui::SameLine();
-    const int unverified =
-        int(library_->tracks.size()) - int(fingerprints_.all().size());
-    if (dupes_.verify.running()) {
-        ImGui::Text("Verifying %d/%d…", dupes_.verify.done(), dupes_.verify.total());
+    // The Mac library is fingerprinted as it is scanned, so only a player's
+    // files ever need a separate pass.
+    if (!dupes_.host) {
         ImGui::SameLine();
-        if (aqua::button("Stop", ImVec2(70, 0))) dupes_.verify.cancel();
-    } else {
-        ImGui::BeginDisabled(unverified <= 0);
-        if (aqua::button("Verify Player Files", ImVec2(160, 0)))
-            startVerifyPass();
-        ImGui::EndDisabled();
-        if (unverified > 0) {
+        const int unverified =
+            int(library_->tracks.size()) - int(fingerprints_.all().size());
+        if (dupes_.verify.running()) {
+            ImGui::Text("Verifying %d/%d…", dupes_.verify.done(), dupes_.verify.total());
             ImGui::SameLine();
-            aqua::body(fonts_, "%d not yet hashed", unverified);
+            if (aqua::button("Stop", ImVec2(70, 0))) dupes_.verify.cancel();
+        } else {
+            ImGui::BeginDisabled(unverified <= 0);
+            if (aqua::button("Verify Player Files", ImVec2(160, 0)))
+                startVerifyPass();
+            ImGui::EndDisabled();
+            if (unverified > 0) {
+                ImGui::SameLine();
+                aqua::body(fonts_, "%d not yet hashed", unverified);
+            }
         }
     }
 
@@ -873,9 +942,9 @@ void App::drawDuplicatesModal() {
     }
     for (std::size_t i = 0; i < dupes_.groups.size(); ++i) {
         const DuplicateGroup& g = dupes_.groups[i];
-        const auto keeperIt = trackIndexById_.find(g.trackIds[0]);
-        if (keeperIt == trackIndexById_.end()) continue;
-        const Track& keeper = library_->tracks[keeperIt->second];
+        const auto keeperIt = index.find(g.trackIds[0]);
+        if (keeperIt == index.end()) continue;
+        const Track& keeper = lib.tracks[keeperIt->second];
 
         ImGui::PushID(int(i));
         bool on = dupes_.enabled[i] != 0;
@@ -890,14 +959,16 @@ void App::drawDuplicatesModal() {
                       formatBytes(g.reclaimBytes).c_str());
         if (ImGui::TreeNode(header)) {
             for (std::size_t k = 0; k < g.trackIds.size(); ++k) {
-                const auto it = trackIndexById_.find(g.trackIds[k]);
-                if (it == trackIndexById_.end()) continue;
-                const Track& t = library_->tracks[it->second];
+                const auto it = index.find(g.trackIds[k]);
+                if (it == index.end()) continue;
+                const Track& t = lib.tracks[it->second];
+                const std::string where =
+                    dupes_.host ? displayPath(t.location) : t.location;
                 ImGui::TextColored(
                     k == 0 ? v4(pal::Success) : v4(pal::TextDim),
                     "%s  %s  %u kbps  %s  %u plays", k == 0 ? "keep" : "  ✕ ",
                     formatDuration(t.lengthMs).c_str(), t.bitrate,
-                    t.location.c_str(), t.playCount);
+                    where.c_str(), t.playCount);
             }
             if (g.allIdenticalFiles)
                 aqua::body(fonts_, "        these files are byte-identical");
@@ -917,8 +988,15 @@ void App::drawDuplicatesModal() {
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    ImGui::BeginDisabled(totalCopies == 0);
-    if (aqua::button("Remove Duplicates", ImVec2(110, 0), totalCopies > 0)) {
+    const bool canRemove = totalCopies > 0 && !(dupes_.host && hostBusy());
+    ImGui::BeginDisabled(!canRemove);
+    if (dupes_.host) {
+        if (aqua::button("Move to Trash", ImVec2(110, 0), canRemove)) {
+            startHostRemoval();
+            dupes_.open = false;
+            ImGui::CloseCurrentPopup();
+        }
+    } else if (aqua::button("Remove Duplicates", ImVec2(110, 0), canRemove)) {
         std::vector<std::uint32_t> doomed;
         KeeperRemap remap;
         for (std::size_t i = 0; i < dupes_.groups.size(); ++i) {
@@ -1161,6 +1239,7 @@ void App::trackContextMenu(const Track& t) {
             ImGui::EndMenu();
         }
         ImGui::EndDisabled();
+        if (ImGui::MenuItem("Show in Finder")) revealSelectedHostTracks();
         ImGui::Separator();
     }
 

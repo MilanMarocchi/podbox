@@ -1,6 +1,7 @@
 #include "library/applemusic.h"
 
 #include "library/dedupe.h"
+#include "library/music_folder.h"
 
 #include <array>
 #include <cstdio>
@@ -84,21 +85,6 @@ std::string stripEol(std::string s) {
     return s;
 }
 
-std::string sanitizeComponent(const std::string& s) {
-    std::string out;
-    for (char c : s) {
-        // '/' and ':' both act as path separators on macOS depending on the
-        // API, and control characters have no business in a filename.
-        if (c == '/' || c == ':' || static_cast<unsigned char>(c) < 0x20)
-            out += '_';
-        else
-            out += c;
-    }
-    while (!out.empty() && (out.back() == ' ' || out.back() == '.'))
-        out.pop_back();
-    return out.empty() ? "Unknown" : out;
-}
-
 }  // namespace
 
 bool appleMusicAvailable() {
@@ -107,10 +93,7 @@ bool appleMusicAvailable() {
            fs::exists("/Applications/Music.app", ec);
 }
 
-fs::path appleMusicCopyRoot() {
-    const char* home = std::getenv("HOME");
-    return fs::path(home ? home : ".") / "Music" / "PodBox";
-}
+fs::path appleMusicCopyRoot() { return defaultMusicFolder(); }
 
 AppleMusicRead readAppleMusicLibrary(int limit) {
     AppleMusicRead out;
@@ -245,9 +228,6 @@ CopyResult copyAppleMusicFiles(std::vector<AppleMusicTrack>& tracks,
     std::error_code ec;
     fs::create_directories(root, ec);
 
-    // Destinations handed out in this run, so two tracks can never be given
-    // the same path.
-    std::unordered_set<std::string> claimed;
     int done = 0;
     for (AppleMusicTrack& t : tracks) {
         if (progress && !progress(done, int(tracks.size()), t.meta.title)) {
@@ -257,60 +237,24 @@ CopyResult copyAppleMusicFiles(std::vector<AppleMusicTrack>& tracks,
         ++done;
         if (t.file.empty()) continue;
 
-        const std::string artist = sanitizeComponent(
-            t.meta.artist.empty() ? "Unknown Artist" : t.meta.artist);
-        const std::string album = sanitizeComponent(
-            t.meta.album.empty() ? "Unknown Album" : t.meta.album);
-
-        // The disc number has to be in the name. Without it every track 1 of
-        // a multi-disc album lands on the same path and the later one wins,
-        // silently destroying the earlier.
-        char prefix[16] = "";
-        if (t.meta.discNumber > 1)
-            std::snprintf(prefix, sizeof(prefix), "%u-%02u ", t.meta.discNumber,
-                          t.meta.trackNumber);
-        else if (t.meta.trackNumber > 0)
-            std::snprintf(prefix, sizeof(prefix), "%02u ", t.meta.trackNumber);
-
-        const std::string stem = prefix + sanitizeComponent(t.meta.title);
-        const std::string ext = toLower(t.file.extension().string());
-
-        const fs::path dir = root / artist / album;
-        fs::create_directories(dir, ec);
-
-        // Two genuinely different songs can still want the same name. Give
-        // the later one a suffix rather than letting it overwrite.
-        //
-        // Compared case-insensitively, because macOS volumes normally are:
-        // "Bring Me The Horizon" and "Bring Me the Horizon" are two strings
-        // but one directory, and treating them as distinct silently
-        // overwrites one song with the other.
-        fs::path dest = dir / (stem + ext);
-        for (int n = 2; claimed.count(toLower(dest.string())) && n < 1000; ++n)
-            dest = dir / (stem + " (" + std::to_string(n) + ")" + ext);
-        claimed.insert(toLower(dest.string()));
-
-        // Resumable: a file already there at the right size is left alone, so
-        // re-running after a cancel does not re-copy 13 GB.
-        const std::uintmax_t srcSize = fs::file_size(t.file, ec);
-        if (!ec && fs::exists(dest, ec) &&
-            fs::file_size(dest, ec) == srcSize) {
-            t.file = dest;
-            t.meta.location = dest.string();
-            ++res.skipped;
-            continue;
-        }
-
-        fs::copy_file(t.file, dest, fs::copy_options::overwrite_existing, ec);
-        if (ec) {
+        // Same naming as every other way into the library, and like them it
+        // never overwrites: a same-size file already at the name is this
+        // song from an earlier run, which is what makes re-running resumable.
+        fs::path dest;
+        bool reused = false;
+        std::string error;
+        if (!placeInMusicFolder(t.file, t.meta, root, &dest, &reused, &error)) {
             ++res.failed;
-            ec.clear();
             continue;
         }
         t.file = dest;
         t.meta.location = dest.string();
-        ++res.copied;
-        res.bytes += srcSize;
+        if (reused) {
+            ++res.skipped;
+        } else {
+            ++res.copied;
+            res.bytes += fs::file_size(dest, ec);
+        }
     }
     return res;
 }

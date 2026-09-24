@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cstdio>
+#include <cstdlib>
 
 #include <strings.h>  // strcasecmp
 
@@ -121,6 +122,18 @@ fs::path locationToPath(const fs::path& mount, const std::string& location) {
 
 std::string plural(int n, const char* one, const char* many) {
     return std::to_string(n) + ' ' + (n == 1 ? one : many);
+}
+
+std::string displayPath(const std::filesystem::path& p) {
+    const std::string s = p.string();
+    const char* home = std::getenv("HOME");
+    if (!home || !*home) return s;
+    const std::string h = home;
+    if (s == h) return "~";
+    if (s.size() > h.size() && s.compare(0, h.size(), h) == 0 &&
+        s[h.size()] == '/')
+        return "~" + s.substr(h.size());
+    return s;
 }
 
 std::string importSummary(int added, int skipped) {

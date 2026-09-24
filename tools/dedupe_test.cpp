@@ -8,13 +8,16 @@
 // The scan is read-only. Nothing here writes to a device.
 
 #include "library/dedupe.h"
+#include "library/host_dedupe.h"
 #include "library/fingerprint.h"
 #include "library/fingerprint_store.h"
 #include "library/artwork.h"
 #include "library/metadata.h"
 
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <unordered_set>
 #include <string>
@@ -228,6 +231,118 @@ void testPlaylistRemoval() {
         const std::vector<std::uint32_t> want = {1, 33, 4, 5};
         check(pl == want, "order is preserved across a mixed removal");
     }
+}
+
+void testWithinFolder() {
+    std::printf("folder containment\n");
+    check(isWithinFolder("/m/a/b.mp3", "/m/a"), "a file in the folder is inside it");
+    check(isWithinFolder("/m/a/x/y/b.mp3", "/m/a"), "so is one nested deeper");
+    check(isWithinFolder("/m/a/b.mp3", "/m/a/"), "a trailing slash changes nothing");
+    check(!isWithinFolder("/m/ab/b.mp3", "/m/a"), "a sibling sharing a prefix is not");
+    check(!isWithinFolder("/m/a", "/m/a"), "the folder is not inside itself");
+    check(!isWithinFolder("/m/a/../b/c.mp3", "/m/a"), "climbing out with .. is not");
+    check(!isWithinFolder("/elsewhere/c.mp3", "/m/a"), "an unrelated path is not");
+}
+
+// Real files in a scratch folder, because every rule here is about what is on
+// disk at the moment of removal. The Trash is faked with a rename.
+void testHostRemoval() {
+    std::printf("Mac library duplicates\n");
+    const fs::path root =
+        fs::temp_directory_path() /
+        ("podbox-hostdedupe-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const fs::path music = root / "Music", other = root / "Elsewhere",
+                   trashDir = root / "Trash";
+    std::error_code ec;
+    fs::create_directories(music / "sub", ec);
+    fs::create_directories(other, ec);
+    fs::create_directories(trashDir, ec);
+    auto touch = [](const fs::path& p) { std::ofstream(p) << p.filename().string(); };
+
+    // Grouping skips songs whose file has gone, and keeps the lossless copy.
+    {
+        touch(music / "song.flac");
+        touch(music / "song.mp3");
+        HostLibrary host;
+        host.setMusicFolder(music);
+        touch(other / "song.mp3");
+        auto add = [&](std::uint64_t id, const fs::path& file, bool missing) {
+            HostTrack h;
+            h.id = id;
+            h.file = file;
+            h.meta = mk(std::uint32_t(id), "A", "Song", "Album", 200000);
+            h.meta.location = file.string();
+            h.missing = missing;
+            h.size = 100;
+            host.tracks().push_back(std::move(h));
+        };
+        add(1, music / "song.mp3", false);
+        add(2, music / "song.flac", false);
+        add(3, music / "gone.mp3", false);    // indexed, but no longer there
+        add(4, music / "song.mp3", true);     // flagged missing by a scan
+        add(5, other / "song.mp3", false);    // outside the library folder
+        const auto groups = findHostDuplicates(host, MatchMode::Exact);
+        checkEq((long long)groups.size(), 1, "one group across the Mac library");
+        if (!groups.empty()) {
+            checkEq((long long)groups[0].trackIds.size(), 2,
+                    "songs missing or outside the library folder are left out");
+            checkEq(groups[0].trackIds[0], 2, "the FLAC is the keeper");
+            checkEq((long long)groups[0].reclaimBytes, 100,
+                    "reclaimable bytes come from the size on disk");
+        }
+    }
+
+    touch(music / "a.flac");
+    touch(music / "a.mp3");
+    touch(music / "b.mp3");
+    touch(other / "b.mp3");
+    touch(music / "c.mp3");
+    touch(music / "d.mp3");
+    touch(music / "e.mp3");
+    fs::create_symlink(music / "e.mp3", music / "sub" / "e.mp3", ec);
+    touch(music / "f.flac");
+    touch(music / "f.mp3");
+
+    const std::vector<HostRemoval> items = {
+        {1, music / "a.mp3", music / "a.flac"},           // trashed
+        {2, other / "b.mp3", music / "b.mp3"},            // outside: unlisted
+        {3, music / "c-gone.mp3", music / "c.mp3"},       // already gone
+        {4, music / "d.mp3", music / "d-keeper.mp3"},     // keeper gone: kept
+        {5, music / "sub" / "e.mp3", music / "e.mp3"},    // same file: unlisted
+        {6, music / "f.mp3", music / "f.flac"},           // Trash refuses: kept
+    };
+    const TrashFn fakeTrash = [&](const fs::path& p, std::string* error) {
+        if (p.filename() == "f.mp3") {
+            *error = "locked";
+            return false;
+        }
+        std::error_code rec;
+        fs::rename(p, trashDir / p.filename(), rec);
+        return !rec;
+    };
+    const HostRemovalResult r = removeHostDuplicates(items, {music}, fakeTrash);
+
+    checkEq(r.trashed, 1, "one file went to the Trash");
+    checkEq(r.unlisted, 3, "three entries were only unlisted");
+    checkEq(r.kept, 2, "two were left alone");
+    check(r.error == "locked", "the Trash's refusal is reported");
+    const std::vector<std::uint64_t> wantRemoved = {1, 2, 3, 5};
+    check(r.removed == wantRemoved, "exactly the handled entries leave the library");
+    check(r.removedFiles.size() == r.removed.size(), "each removal names its file");
+
+    check(!fs::exists(music / "a.mp3") && fs::exists(trashDir / "a.mp3"),
+          "the duplicate is in the Trash");
+    check(fs::exists(music / "a.flac"), "and the keeper is untouched");
+    check(fs::exists(other / "b.mp3"),
+          "a file outside PodBox's folders is never trashed");
+    check(fs::exists(music / "d.mp3"),
+          "a duplicate whose keeper vanished is not trashed");
+    check(fs::exists(music / "e.mp3") && fs::is_symlink(music / "sub" / "e.mp3"),
+          "a second name for the keeper is not trashed");
+    check(fs::exists(music / "f.mp3"), "a refused file stays put");
+
+    fs::remove_all(root, ec);
 }
 
 void testTagWriting(const fs::path& sample) {
@@ -492,6 +607,8 @@ int main(int argc, char** argv) {
     testGrouping();
     testBucketBoundary();
     testPlaylistRemoval();
+    testWithinFolder();
+    testHostRemoval();
     testStore();
     testMediaTypes();
 

@@ -51,6 +51,11 @@ void App::applyBackgroundWork() {
             }
         } catch (const std::exception& e) { setStatus(e.what()); }
     }
+    // Before the host save below, so the smaller library is saved this frame.
+    if (hostRemovalJob_.ready()) {
+        try { applyHostRemoval(*hostRemovalJob_.take()); }
+        catch (const std::exception& e) { setStatus(e.what()); }
+    }
     if (fingerprintSaveJob_.ready()) {
         try {
             if (!*fingerprintSaveJob_.take()) setStatus("Could not save song fingerprints");

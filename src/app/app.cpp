@@ -18,6 +18,7 @@
 #include "library/transcode.h"
 #include "ui/aqua.h"
 #include "ui/theme.h"
+#include "util/finder.h"
 
 #include <imgui.h>
 
@@ -69,7 +70,7 @@ bool App::prepareToClose() {
         recovery_.running || dupes_.verify.running() || dropJob_.busy() ||
         artJob_.busy() || monitorJob_.busy() || hostSaveJob_.busy() ||
         folderJob_.busy() || tagJob_.busy() || syncPlanJob_.busy() ||
-        duplicateJob_.busy() || hostSavePending_ || !pendingHostTags_.empty() ||
+        duplicateJob_.busy() || hostRemovalJob_.busy() || hostSavePending_ || !pendingHostTags_.empty() ||
         fingerprintSaveJob_.busy() || fingerprintSavePending_ || folderCheckJob_.busy() || encoderJob_.busy() || watcher_.busy()) return false;
     if (closeWithoutSaving_) return true;
     applyCompletedAdds();
@@ -217,7 +218,7 @@ void App::frame() {
     const float middleHeight =
         std::max(0.0f, vp->WorkSize.y - kToolbarHeight - kStatusBarHeight);
 
-    ImGui::BeginDisabled(deviceJob_.busy() || !ejectRequestedMount_.empty() || closeRequested_ || scan_.running || apple_.copying);
+    ImGui::BeginDisabled(deviceJob_.busy() || !ejectRequestedMount_.empty() || closeRequested_ || hostBusy());
     drawToolbar();
     ImGui::SetCursorPos(ImVec2(0, kToolbarHeight));
     drawSidebar(middleHeight);
@@ -251,7 +252,7 @@ void App::frame() {
     drawFoldersModal();
     ImGui::EndDisabled();
     drawAppleMusicModal();
-    ImGui::BeginDisabled(deviceJob_.busy() || !ejectRequestedMount_.empty() || closeRequested_ || scan_.running || apple_.copying);
+    ImGui::BeginDisabled(deviceJob_.busy() || !ejectRequestedMount_.empty() || closeRequested_ || hostBusy());
     drawSyncModal();
     drawGetInfoModal();
 
@@ -523,7 +524,7 @@ bool App::restoreSupported() const {
 }
 
 void App::setTrackRating(std::uint32_t trackId, int rating) {
-    if (deviceJob_.busy() || scan_.running || apple_.copying) return;
+    if (deviceJob_.busy() || hostBusy()) return;
     if (rating < 0 || rating > 100) return;
 
     if (viewingHost()) {
@@ -926,10 +927,83 @@ void App::rebuildHostView() {
         hostView_.tracks.push_back(std::move(t));
     }
     visibleDirty_ = true;
+    // A review of the Mac library names tracks by id; this may have changed
+    // which ids exist.
+    if (dupes_.host) dupes_.dirty = true;
+}
+
+void App::revealSelectedHostTracks() {
+    if (!viewingHost() || selection_.empty()) return;
+    std::vector<fs::path> files;
+    std::unordered_set<std::string> folders;
+    for (const std::uint32_t id : selection_) {
+        const auto it = hostIndexById_.find(id);
+        if (it == hostIndexById_.end()) continue;
+        fs::path file = hostView_.tracks[it->second].location;
+        folders.insert(file.parent_path().string());
+        files.push_back(std::move(file));
+    }
+    // Finder opens a window for each folder involved, so a selection spread
+    // across the whole library would bury the screen in them.
+    constexpr std::size_t kMaxFolders = 10;
+    if (folders.size() > kMaxFolders) {
+        setStatus("Those songs are in " +
+                  plural(int(folders.size()), "folder", "folders") +
+                  " — select fewer to show them in Finder");
+        return;
+    }
+    if (!revealInFinder(files))
+        setStatus(files.size() == 1 ? "That song's file is no longer on this Mac"
+                                    : "Those songs' files are no longer on this Mac");
+}
+
+void App::applyHostRemoval(const HostRemovalResult& r) {
+    // Applied even while closing: the files are already in the Trash, so the
+    // library has to stop listing them whatever happens next.
+    const std::unordered_set<std::uint64_t> gone(r.removed.begin(),
+                                                 r.removed.end());
+    if (const Track* t = playingTrack()) {
+        const fs::path playing = trackFilePath(*t);
+        if (std::find(r.removedFiles.begin(), r.removedFiles.end(), playing) !=
+            r.removedFiles.end()) {
+            player_->stop();
+            playingTrackId_ = 0;
+        }
+    }
+    if (!gone.empty()) {
+        std::erase_if(host_.tracks(), [&gone](const HostTrack& h) {
+            return gone.count(h.id) > 0;
+        });
+        saveHost();
+        rebuildHostView();
+        if (viewingHost()) {
+            std::erase_if(selection_, [this](std::uint32_t id) {
+                return !hostIndexById_.count(id);
+            });
+            if (!hostIndexById_.count(selectedTrackId_))
+                selectedTrackId_ = selection_.empty() ? 0 : selection_.back();
+            selectionAnchor_ = selectedTrackId_;
+        }
+    }
+
+    std::string msg;
+    if (r.trashed)
+        msg = "Moved " + plural(r.trashed, "duplicate", "duplicates") +
+              " to the Trash";
+    if (r.unlisted)
+        msg += (msg.empty() ? "Removed " : ", removed ") +
+               plural(r.unlisted, "duplicate", "duplicates") +
+               " from the library";
+    if (r.kept) {
+        msg += (msg.empty() ? "" : " · ") +
+               plural(r.kept, "duplicate was", "duplicates were") + " left in place";
+        if (!r.error.empty()) msg += ": " + r.error;
+    }
+    setStatus(msg.empty() ? "No duplicates were removed" : msg);
 }
 
 void App::pullPlayCountsToHost() {
-    if (scan_.running || apple_.copying) return;
+    if (hostBusy()) return;
     if (!library_ || host_.tracks().empty()) return;
 
     // Index the Mac library by both measures, so a song that went over as a
@@ -980,7 +1054,7 @@ void App::pullPlayCountsToHost() {
 }
 
 void App::rescanWatchFolders() {
-    if (scan_.running || apple_.busy) return;
+    if (scan_.running || apple_.busy || hostRemovalJob_.busy()) return;
     if (scan_.thread.joinable()) scan_.thread.join();
 
     // The worker gets its own copy so the UI can keep reading the live
@@ -996,7 +1070,7 @@ void App::rescanWatchFolders() {
 
         scan_.finished.store(true);
     });
-    setStatus("Scanning your music folders…");
+    setStatus("Scanning your library and importing new songs…");
 }
 
 void App::applyFinishedScan() {
@@ -1018,8 +1092,8 @@ void App::applyFinishedScan() {
     pullPlayCountsToHost();
 
     const ScanStats& s = scan_.stats;
-    if (s.added || s.updated || s.missing) {
-        std::string msg = "Library: " + plural(s.added, "song", "songs") +
+    if (s.imported || s.added || s.updated || s.missing) {
+        std::string msg = "Library: " + plural(s.imported + s.added, "song", "songs") +
                           " added";
         if (s.updated) msg += ", " + std::to_string(s.updated) + " updated";
         if (s.missing) msg += ", " + std::to_string(s.missing) + " missing";

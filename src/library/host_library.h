@@ -2,11 +2,13 @@
 
 #include "itdb/itunesdb.h"
 #include "library/fingerprint.h"
+#include "library/music_folder.h"
 
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace podbox {
@@ -26,19 +28,27 @@ struct HostTrack {
     std::int64_t mtime = 0;
     std::uint64_t size = 0;
 
-    std::string origin;        // "watch" or "applemusic"
+    std::string origin;        // "watch", "import" or "applemusic"
     bool missing = false;      // the file was not there on the last scan
 };
 
-// A folder PodBox indexes. The files stay where they are and are never
-// modified — indexing a folder is not the same as importing from it.
+// A folder PodBox imports from, such as a Soulseek downloads folder. New songs
+// found in it are copied into the library folder; nothing in it is ever
+// changed, moved or deleted.
 struct WatchFolder {
     std::filesystem::path path;
     bool enabled = true;
 };
 
+// True when `file` lies somewhere below `root`. Compared lexically, so
+// "/Music/A" does not contain "/Music/AB/x.mp3", and a trailing slash on the
+// root makes no difference.
+bool isWithinFolder(const std::filesystem::path& file,
+                    const std::filesystem::path& root);
+
 struct ScanStats {
-    int added = 0;
+    int imported = 0;    // copied in from an import folder
+    int added = 0;       // found already in the library folder
     int updated = 0;     // file changed since last scan
     int unchanged = 0;
     int missing = 0;     // previously indexed, now gone
@@ -50,8 +60,11 @@ struct ScanStats {
 
 // PodBox's own library, entirely separate from Apple Music's.
 //
-// Lives in ~/Library/Application Support/PodBox/. Nothing here writes to the
-// Apple Music library or to the folders it indexes.
+// The library is the music folder (~/Music/PodBox, music_folder.h): every
+// track's file is there, and it is the only thing indexed, synced or
+// deduplicated. The index itself lives in ~/Library/Application Support/PodBox/.
+// Nothing here writes to the Apple Music library or to the folders it imports
+// from.
 class HostLibrary {
 public:
     static std::filesystem::path configDir();
@@ -70,23 +83,39 @@ public:
     void removeWatchFolder(std::size_t index);
     void setWatchFolderEnabled(std::size_t index, bool enabled);
 
+    // Where the library's files live. Only tests point it anywhere else.
+    const std::filesystem::path& musicFolder() const { return musicFolder_; }
+    void setMusicFolder(const std::filesystem::path& p) { musicFolder_ = p; }
+
+    // Every file ever copied in from an import folder. A file here is never
+    // copied again, even once its copy has been deleted from the library —
+    // that is what keeps a removed duplicate removed.
+    const std::unordered_set<std::string>& importedFiles() const {
+        return imported_;
+    }
+
     // On a first run with no folders configured, offer the obvious one. Only
     // adds a folder that actually exists, so this is a no-op elsewhere.
     void seedDefaultWatchFolders();
 
-    // Re-indexes every enabled watch folder. `fingerprintFiles` also hashes
-    // audio content, which is what makes byte-identical duplicate detection
-    // possible but roughly triples the cost of a cold scan.
+    // Brings the library up to date:
+    //   1. indexes the music folder, the library itself;
+    //   2. copies in any track still played from outside it (libraries from
+    //      before the music folder indexed their folders in place), keeping
+    //      its play count and rating;
+    //   3. copies in every song in an enabled import folder that has not been
+    //      imported before. Folders marking downloads in progress are skipped.
+    // `fingerprintFiles` also hashes audio content, which is what makes
+    // byte-identical duplicate detection possible but roughly triples the
+    // cost of a cold scan.
     //
     // `cancelled` is polled between files so a long scan stays interruptible.
     ScanStats rescan(bool fingerprintFiles = true,
                      const std::atomic<bool>* cancelled = nullptr,
                      std::string* currentFile = nullptr);
 
-    // Marks every track whose file has gone, whatever it was indexed from.
-    // Watch-folder tracks are handled by rescan(); this also covers copies
-    // (from Apple Music, say) that were later deleted by hand. Returns how
-    // many are now missing.
+    // Marks every track whose file has gone, without the rest of a rescan.
+    // Returns how many are now missing.
     int refreshMissing();
 
     // Drops the tracks currently flagged missing. Returns how many went.
@@ -106,6 +135,8 @@ private:
     std::vector<HostTrack> tracks_;
     std::vector<WatchFolder> watch_;
     std::uint64_t nextId_ = 1;
+    std::filesystem::path musicFolder_ = defaultMusicFolder();
+    std::unordered_set<std::string> imported_;
 };
 
 }  // namespace podbox

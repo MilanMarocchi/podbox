@@ -12,6 +12,7 @@
 #include "ui/aqua.h"
 #include "ui/macos_window.h"
 #include "ui/theme.h"
+#include "util/finder.h"
 
 #include <imgui.h>
 
@@ -501,12 +502,25 @@ void App::drawSidebar(float height) {
     // items live in one place rather than being written out twice.
     auto libraryActions = [&] {
         ImGui::PushStyleColor(ImGuiCol_Text, v4(pal::Text));
-        ImGui::BeginDisabled(scan_.running);
+        ImGui::BeginDisabled(hostBusy());
         if (ImGui::MenuItem(scan_.running ? "Scanning…" : "Rescan"))
             rescanWatchFolders();
         ImGui::EndDisabled();
         if (ImGui::MenuItem("Music Folders…")) foldersOpen_ = true;
         if (ImGui::MenuItem("Import from Apple Music…")) apple_.open = true;
+        ImGui::Separator();
+        ImGui::BeginDisabled(host_.tracks().empty() || hostBusy());
+        if (ImGui::MenuItem("Find Duplicates…")) {
+            dupes_.open = true;
+            dupes_.host = true;
+            dupes_.dirty = true;
+        }
+        ImGui::EndDisabled();
+
+        // Every song in the library lives in this one folder.
+        if (ImGui::MenuItem("Show in Finder") && !openInFinder(host_.musicFolder()))
+            setStatus(displayPath(host_.musicFolder()) +
+                      " doesn't exist yet — press Rescan to fill it");
         ImGui::PopStyleColor();
     };
 
@@ -685,8 +699,8 @@ void App::drawMainPanel(float height) {
     if (view_ == View::Library && hostView_.tracks.empty()) {
         const char* msg =
             host_.watchFolders().empty()
-                ? "No music folders yet — add one in the device pane"
-                : "Nothing indexed yet — press Rescan in the sidebar";
+                ? "Your library is empty — add a folder to import from under Music Folders…"
+                : "Nothing imported yet — press Rescan in the sidebar";
         const ImVec2 avail = ImGui::GetWindowSize();
         const ImVec2 ts = ImGui::CalcTextSize(msg);
         ImGui::SetCursorPos(
@@ -1026,6 +1040,7 @@ void App::drawDeviceView(const DeviceInfo& dev) {
     ImGui::BeginDisabled(!canScan);
     if (ImGui::Button("Find Duplicates…")) {
         dupes_.open = true;
+        dupes_.host = false;
         dupes_.dirty = true;
     }
     ImGui::EndDisabled();
@@ -1317,7 +1332,7 @@ void App::drawTrackTable() {
 void App::handleTrackTableKeys() {
     // Raw key polling is not suppressed by ImGui::BeginDisabled.
     if (deviceJob_.busy() || !ejectRequestedMount_.empty() || closeRequested_ ||
-        scan_.running || apple_.copying) return;
+        hostBusy()) return;
     const ImGuiIO& io = ImGui::GetIO();
     const bool command = io.KeySuper || io.KeyCtrl;
     if (!io.WantTextInput && command && ImGui::IsKeyPressed(ImGuiKey_A)) {

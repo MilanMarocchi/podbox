@@ -155,8 +155,10 @@ add_library(podbox_core STATIC
   src/library/fingerprint.cpp
   src/library/fingerprint_store.cpp
   src/library/applemusic.cpp
+  src/library/host_dedupe.cpp
   src/library/host_library.cpp
   src/library/metadata.cpp
+  src/library/music_folder.cpp
   src/library/transcode.cpp
   src/sync/sync_engine.cpp
   src/sync/sync_plan.cpp
@@ -190,12 +192,12 @@ endif()
 
 if(APPLE)
   set(PODBOX_AUDIO_SRC src/audio/player_avf.mm)
-  set(PODBOX_PLATFORM_SRC src/ui/macos_window.mm)
+  set(PODBOX_PLATFORM_SRC src/ui/macos_window.mm src/util/finder_mac.mm)
   set_source_files_properties(src/audio/player_avf.mm src/ui/macos_window.mm
-    PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    src/util/finder_mac.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 else()
   set(PODBOX_AUDIO_SRC src/audio/player_null.cpp)
-  set(PODBOX_PLATFORM_SRC src/ui/macos_window_stub.cpp)
+  set(PODBOX_PLATFORM_SRC src/ui/macos_window_stub.cpp src/util/finder_stub.cpp)
 endif()
 
 # On macOS this builds PodBox.app rather than a bare binary: a bundle is what
@@ -256,6 +258,9 @@ target_link_libraries(dedupe_test PRIVATE podbox_core)
 add_executable(library_test tools/library_test.cpp)
 target_link_libraries(library_test PRIVATE podbox_core)
 
+add_executable(music_folder_test tools/music_folder_test.cpp)
+target_link_libraries(music_folder_test PRIVATE podbox_core)
+
 add_executable(applemusic_test tools/applemusic_test.cpp)
 target_link_libraries(applemusic_test PRIVATE podbox_core)
 
@@ -281,7 +286,8 @@ target_link_libraries(ui_test PRIVATE podbox_core imgui_lib)
 add_executable(background_test tools/background_test.cpp
   src/app/app.cpp src/app/app_background.cpp src/app/app_chrome.cpp
   src/app/app_modals.cpp src/app/app_util.cpp src/ui/aqua.cpp src/ui/theme.cpp
-  src/audio/player_null.cpp src/ui/macos_window_stub.cpp)
+  src/audio/player_null.cpp src/ui/macos_window_stub.cpp
+  src/util/finder_stub.cpp)
 target_link_libraries(background_test PRIVATE podbox_core imgui_lib)
 
 add_executable(hash58_test tools/hash58_test.cpp)
@@ -353,6 +359,7 @@ endif()
 # into CTest. Run with: ctest --test-dir build
 enable_testing()
 add_test(NAME dedupe COMMAND dedupe_test)
+add_test(NAME music_folder COMMAND music_folder_test)
 add_test(NAME sync COMMAND sync_test --self-test)
 add_test(NAME filesystem_player COMMAND filesystem_player_test)
 add_test(NAME ipod_recovery COMMAND ipod_recovery_test)

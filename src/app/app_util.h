@@ -96,6 +96,9 @@ std::filesystem::path locationToPath(const std::filesystem::path& mount,
 
 std::string plural(int n, const char* one, const char* many);
 
+// `p` with the home folder shortened to "~", the way Finder's path bar reads.
+std::string displayPath(const std::filesystem::path& p);
+
 // What the status bar says once an import batch drains.
 std::string importSummary(int added, int skipped);
 

@@ -108,19 +108,24 @@ as a separate backend; they are not mistaken for filesystem paths.
 
 ### On your Mac
 
-- **A music library of your own.** Point PodBox at folders and it indexes them
-  in place. It reads tags and computes a fingerprint; it **never moves, renames
-  or modifies your files**. The index lives in
-  `~/Library/Application Support/PodBox/library.tsv`.
+- **A music library of your own.** The library is one folder,
+  `~/Music/PodBox/`, sorted into `Artist/Album/NN Title.ext`. It is the only
+  thing PodBox indexes, plays, syncs or deduplicates. Songs arrive by being
+  **copied** in, and the originals are never moved, renamed or modified. The
+  index lives in `~/Library/Application Support/PodBox/library.tsv`.
 - **Send exactly what you selected.** Click-drag across songs in the Mac
   library, right-click the selection, then choose *Copy N Songs to…* and the
   destination device. It uses the same duplicate checks, transcoding queue and
   one final database write as dropping those files onto the window.
-- **Watch folders** — add and remove them under *Folders…* in the sidebar, with
-  a per-folder enable switch and a live song count. Rescanning is incremental:
-  files whose size and modification time are unchanged are skipped. Files that
-  have disappeared are *flagged*, not deleted, and a folder on a drive that
-  isn't mounted is treated as unavailable rather than empty.
+- **Import folders** — add your download folders under *Music Folders…* in the
+  sidebar, with a per-folder enable switch. Each *Rescan* copies every song
+  that is new in them into the library folder, **once**: PodBox records each
+  file it has copied, so a song you later delete from the library (say, as a
+  duplicate) is not brought back. Nothing in an import folder is ever changed,
+  moved or deleted, and folders named `downloading` or `incomplete` are never
+  imported. On APFS the copies are clones, so they take almost no extra space.
+  Rescanning the library folder is incremental; files that have disappeared
+  from it are *flagged*, not dropped.
 - **Import from Apple Music** — PodBox reads your Music.app library through
   AppleScript and **copies** the files out to `~/Music/PodBox/Artist/Album/`.
   It never writes to Apple Music's own folder, which is protected by macOS and
@@ -133,12 +138,17 @@ as a separate backend; they are not mistaken for filesystem paths.
   what's already there, what's missing. Removal is opt-in, off by default, and
   needs a second explicit confirmation; songs that exist only on the iPod are
   called out separately, because deleting those is not recoverable.
-- **Find duplicates** — group the iPod's library by artist/title/album/length
+- **Find duplicates** — group a library by artist/title/album/length
   (*Exact*) or just artist and title (*Loose*), and remove the redundant
   copies in bulk. The better copy is kept: lossless first, then play count,
-  rating, bitrate, file size. **Playlists are never shortened** — an entry
-  pointing at a removed copy is rewritten to the one being kept. Optionally
-  verify that copies are byte-for-byte identical before removing anything.
+  rating, bitrate, file size. On a player, **playlists are never shortened** —
+  an entry pointing at a removed copy is rewritten to the one being kept — and
+  you can verify that copies are byte-for-byte identical before removing
+  anything. On the Mac only `~/Music/PodBox/` is ever looked at, removed copies
+  go to the Trash, and album folders left empty are tidied away.
+- **Show in Finder** — open the library folder from the *…* menu on LIBRARY,
+  reveal selected songs from their right-click menu, or open any import
+  folder from *Music Folders…*.
 
 ### Why re-tagging doesn't confuse it
 
@@ -334,16 +344,18 @@ flake is macOS-only for that reason.
 6. **Playlists**: click *+ New Playlist*, or right-click a song → *Add to
    Playlist*. Right-click a playlist to rename or delete it. Drag rows to
    reorder a playlist.
-7. **Build a Mac library**: under **Library** in the sidebar, use *Folders…* to
-   add the folders your music lives in, then *Rescan*. Use *Apple Music…* to
-   copy tracks out of Music.app. Then *Sync Library to Player…* in the device
-   pane.
+7. **Build a Mac library**: from the *…* menu on **Library** in the sidebar,
+   use *Music Folders…* to add the folders your downloads land in, then
+   *Rescan* to copy their songs into `~/Music/PodBox/`. Use *Import from Apple
+   Music…* to copy tracks out of Music.app, and *Find Duplicates…* to clear
+   repeats from the library folder. Then *Sync Library to Player…* in the
+   device pane.
 8. **Eject** with the button on the device row before unplugging.
 
 If you have never used PodBox before and one of `~/Soulseek Downloads/complete`,
 `~/Soulseek Downloads` or `~/Nicotine Downloads` exists, the most specific of
-them is added as a watch folder automatically. Remove it under *Folders…* if
-that isn't what you want.
+them is added as an import folder automatically. Remove it under *Music
+Folders…* if that isn't what you want.
 
 MP3 conversion uses `ffmpeg` or `lame` if installed; without either, the "MP3"
 option falls back to AAC (which the iPod also plays) and relabels itself to say
@@ -391,8 +403,8 @@ On your Mac:
 
 | Path | What |
 |---|---|
-| `~/Library/Application Support/PodBox/library.tsv` | the Mac library index and watch-folder list |
-| `~/Music/PodBox/` | files copied out of Apple Music |
+| `~/Library/Application Support/PodBox/library.tsv` | the Mac library index, import-folder list and the record of every file already imported |
+| `~/Music/PodBox/` | the Mac library itself: songs copied in from import folders and Apple Music |
 
 On the iPod, all under `iPod_Control/iTunes/`:
 
