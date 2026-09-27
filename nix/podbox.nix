@@ -13,6 +13,7 @@
   fetchFromGitHub,
   zlib,
   sqlite,
+  apple-sdk_26,
 }:
 
 let
@@ -86,6 +87,12 @@ stdenv.mkDerivation {
   buildInputs = [
     zlib
     sqlite
+    # The newest SDK nixpkgs packages, in place of stdenv's 14.4 default.
+    # AppKit keys its look off the SDK a binary was linked against, so this is
+    # what gets PodBox's window chrome the current macOS styling rather than a
+    # compatibility rendering. It does not raise the deployment target, which
+    # CMakeLists.txt pins separately.
+    apple-sdk_26
   ];
 
   cmakeFlags = sourceDirFlags ++ [
