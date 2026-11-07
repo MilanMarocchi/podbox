@@ -14,6 +14,9 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <sstream>
+#include <stdexcept>
+#include <future>
 
 namespace fs = std::filesystem;
 using namespace podbox;
@@ -96,12 +99,23 @@ void testPlacement() {
     check(!reused, "a first copy is a real copy");
     check(fs::exists(root / "src" / "a.wav"), "the original stays");
 
+    writeWav(root / "src" / "same-size.wav", 1000);
+    {
+        std::fstream changed(root / "src" / "same-size.wav", std::ios::in | std::ios::out | std::ios::binary);
+        changed.seekp(-1, std::ios::end);
+        changed.put('\x55');
+    }
+    fs::path collision;
+    check(placeInMusicFolder(root / "src" / "same-size.wav", meta, lib, &collision, &reused, &error) &&
+              !reused && collision.filename() == "03 Song (2).wav",
+          "equal-size files with different audio are both preserved");
+
     check(placeInMusicFolder(root / "src" / "a.wav", meta, lib, &dest, &reused, &error) &&
               reused && dest.filename() == "03 Song.wav",
           "the same song again reuses its copy");
 
     check(placeInMusicFolder(root / "src" / "b.wav", meta, lib, &dest, &reused, &error) &&
-              !reused && dest.filename() == "03 Song (2).wav",
+              !reused && dest.filename() == "03 Song (3).wav",
           "a different file wanting the name gets its own");
     checkEq((long long)fs::file_size(lib / "Band" / "Record_ Deluxe" / "03 Song.wav"),
             (long long)fs::file_size(root / "src" / "a.wav"),
@@ -213,12 +227,130 @@ void testImport() {
     fs::remove_all(root);
 }
 
+std::string readAll(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::ostringstream out; out << in.rdbuf(); return out.str();
+}
+
+void testPersistence() {
+    std::printf("safe index persistence\n");
+    const auto root = scratch();
+    const auto index = root / "config" / "library.tsv";
+    HostLibrary host;
+    check(!host.load(index), "absent index is a first run");
+    Track song; song.title = "Song\twith\\escapes\nand a newline"; song.playCount = 8;
+    writeWav(root / "song.wav");
+    host.upsert(root / "song.wav", song, "import");
+    check(host.save(index), "save a new isolated library");
+    const std::string first = readAll(index);
+    HostLibrary stale;
+    check(stale.load(index), "a second app loads the same revision");
+    auto snapshot = host;
+    host.tracks()[0].meta.playCount = 9;
+    check(host.save(index), "save a new revision");
+    check(readAll(index.string() + ".bak.1") == first, "previous index backed up intact");
+    snapshot.tracks()[0].meta.playCount = 10;
+    check(snapshot.save(index), "serialized worker snapshots share the saved revision");
+    const std::string latest = readAll(index);
+    check(!stale.save(index) && readAll(index) == latest, "a competing app cannot overwrite newer changes");
+    HostLibrary fresh;
+    check(!fresh.save(index), "an uninitialized library cannot replace an existing index");
+    for (int i=0;i<7;++i) { host.tracks()[0].meta.playCount=20+i; check(host.save(index), "rotate saved revisions"); }
+    for (int i=1;i<=5;++i) {
+        HostLibrary backup;
+        check(backup.load(index.string()+".bak."+std::to_string(i)), "each rolling backup is readable");
+    }
+    HostLibrary loaded;
+    check(loaded.load(index) && loaded.tracks().size()==1 && loaded.tracks()[0].meta.title==song.title,
+          "escaped paths and metadata round-trip");
+    const auto original = readAll(index);
+    auto damaged = original;
+    const auto titleAt = damaged.find("Song");
+    if (titleAt != std::string::npos) damaged[titleAt] = 'X';
+    std::ofstream(index, std::ios::binary) << damaged;
+    bool checksumRejected=false;
+    try { HostLibrary broken; broken.load(index); } catch (const std::runtime_error&) { checksumRejected=true; }
+    check(checksumRejected, "checksum detects a changed field even when row counts still match");
+    const auto cut = original.rfind("C\t");
+    std::ofstream(index, std::ios::binary) << original.substr(0,cut);
+    bool rejected=false;
+    try { loaded.load(index); } catch (const std::runtime_error&) { rejected=true; }
+    check(rejected && loaded.tracks().size()==1, "truncation is rejected without clearing the live library");
+    check(!loaded.save(index), "a damaged index is not overwritten after failed load");
+    std::ofstream(index) << "podbox-library 1\nT\tbroken\n";
+    rejected=false;
+    try { loaded.load(index); } catch (const std::runtime_error&) { rejected=true; }
+    check(rejected, "a malformed legacy row cannot silently disappear");
+    fs::remove_all(root);
+}
+
+void testRecoveryAndCase() {
+    std::printf("missing originals and filesystem identity\n");
+    const auto root=scratch(), inbox=root/"complete", music=root/"PodBox";
+    writeWav(inbox/"song.wav");
+    HostLibrary host; host.setMusicFolder(music);host.addWatchFolder(inbox);
+    host.rescan(true);
+    check(host.tracks().size()==1, "fixture imported");
+    if (host.tracks().empty()) { fs::remove_all(root); return; }
+    const auto id=host.tracks()[0].id;
+    host.tracks()[0].meta.playCount=42;
+    host.tracks()[0].meta.rating=80;
+    fs::remove(host.tracks()[0].file);
+    auto result=host.rescan(true);
+    check(result.restored==1 && host.tracks().size()==1 && host.tracks()[0].id==id &&
+          host.tracks()[0].meta.playCount==42 && host.tracks()[0].meta.rating==80 && !host.tracks()[0].missing &&
+          fs::exists(host.tracks()[0].file), "rescan restores a missing song from its original and preserves history");
+    auto actual=host.tracks()[0].file;
+    auto alias=actual.parent_path()/"SONG.WAV";
+    if (fs::exists(alias)) {
+        host.tracks()[0].file=alias;
+        result=host.rescan(true);
+        check(host.tracks().size()==1 && host.tracks()[0].id==id && !host.tracks()[0].missing &&
+              host.tracks()[0].meta.playCount==42, "case aliases keep the same id and play history after a scan");
+        host.upsert(alias,host.tracks()[0].meta,"import");
+        check(host.tracks().size()==1,"upserting a case alias does not invent another track");
+    }
+    host.tracks()[0].missing=true;
+    check(host.removeMissing()==0,"stale missing flags cannot unlist a returned file");
+    fs::remove(actual);
+    host.tracks().clear();
+    result=host.rescan(true);
+    check(host.tracks().empty() && result.restored==0,"deliberately removed entries are not resurrected");
+    fs::remove_all(root);
+}
+
+void testConcurrentPlacement() {
+    const auto root=scratch();
+    writeWav(root/"a.wav", 100000);
+    writeWav(root/"b.wav", 100000);
+    { std::fstream out(root/"b.wav",std::ios::in|std::ios::out|std::ios::binary);out.seekp(-1,std::ios::end);out.put('\x55'); }
+    Track meta;meta.artist="A";meta.album="B";meta.title="Same name";
+    std::promise<void> ready;auto gate=ready.get_future().share();
+    auto copy=[&](const fs::path& src) {
+        gate.wait();fs::path dest;bool reused=false;std::string error;
+        const bool ok=placeInMusicFolder(src,meta,root/"library",&dest,&reused,&error);
+        return std::pair(ok,dest);
+    };
+    auto a=std::async(std::launch::async,copy,root/"a.wav");
+    auto b=std::async(std::launch::async,copy,root/"b.wav");
+    ready.set_value();const auto first=a.get(),second=b.get();
+    check(first.first&&second.first&&first.second!=second.second,
+          "concurrent imports with a shared name both get their own file");
+    if(first.first&&second.first)
+        check(readAll(first.second)==readAll(root/"a.wav")&&readAll(second.second)==readAll(root/"b.wav"),
+              "a concurrent importer cannot overwrite the other song");
+    fs::remove_all(root);
+}
+
 }  // namespace
 
 int main() {
     testPlacement();
     testPrune();
     testImport();
+    testPersistence();
+    testRecoveryAndCase();
+    testConcurrentPlacement();
     std::printf("\n%s\n", failures ? "FAILED" : "OK");
     return failures ? 1 : 0;
 }

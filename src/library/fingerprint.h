@@ -18,7 +18,8 @@ namespace podbox {
 // reliably share a fingerprint; two different songs sharing one is vanishingly
 // unlikely.
 //
-// A fingerprint match means "certainly the same file". A mismatch means very
+// A fingerprint match is strong evidence of matching audio; it is not a
+// whole-file equality test. A mismatch means very
 // little on its own — a transcode of a song is a different file by this
 // measure — so callers pair it with the metadata key in dedupe.h.
 //

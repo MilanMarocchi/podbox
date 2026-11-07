@@ -9,7 +9,7 @@ if(CMAKE_HOST_APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
       "Minimum macOS version" FORCE)
 endif()
 
-project(PodBox VERSION 0.1.0 LANGUAGES C CXX)
+project(PodBox VERSION 0.1.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -131,6 +131,9 @@ set(TAGLIB_INCLUDES
   ${taglib_SOURCE_DIR}/taglib/mp4
   ${taglib_SOURCE_DIR}/taglib/flac
   ${taglib_SOURCE_DIR}/taglib/ogg
+  ${taglib_SOURCE_DIR}/taglib/riff
+  ${taglib_SOURCE_DIR}/taglib/riff/wav
+  ${taglib_SOURCE_DIR}/taglib/riff/aiff
   ${taglib_BINARY_DIR}
   ${taglib_BINARY_DIR}/taglib)
 
@@ -142,6 +145,7 @@ add_library(podbox_core STATIC
   src/device/ipod_recovery.cpp
   $<IF:$<BOOL:${APPLE}>,src/device/usb_serial_mac.cpp,src/device/usb_serial_stub.cpp>
   src/itdb/hash58.cpp
+  src/itdb/artworkdb.cpp
   src/itdb/hash72.cpp
   src/itdb/hashab.cpp
   src/itdb/itunescdb.cpp
@@ -261,6 +265,14 @@ target_link_libraries(library_test PRIVATE podbox_core)
 add_executable(music_folder_test tools/music_folder_test.cpp)
 target_link_libraries(music_folder_test PRIVATE podbox_core)
 
+add_executable(artwork_test tools/artwork_test.cpp)
+target_include_directories(artwork_test PRIVATE ${TAGLIB_INCLUDES} ${stb_SOURCE_DIR})
+target_link_libraries(artwork_test PRIVATE podbox_core)
+
+add_executable(ipod_artwork_test tools/ipod_artwork_test.cpp)
+target_include_directories(ipod_artwork_test PRIVATE ${stb_SOURCE_DIR})
+target_link_libraries(ipod_artwork_test PRIVATE podbox_core)
+
 add_executable(applemusic_test tools/applemusic_test.cpp)
 target_link_libraries(applemusic_test PRIVATE podbox_core)
 
@@ -360,6 +372,9 @@ endif()
 enable_testing()
 add_test(NAME dedupe COMMAND dedupe_test)
 add_test(NAME music_folder COMMAND music_folder_test)
+add_test(NAME artwork COMMAND artwork_test)
+add_test(NAME ipod_artwork COMMAND ipod_artwork_test)
+set_tests_properties(artwork PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 90)
 add_test(NAME sync COMMAND sync_test --self-test)
 add_test(NAME filesystem_player COMMAND filesystem_player_test)
 add_test(NAME ipod_recovery COMMAND ipod_recovery_test)

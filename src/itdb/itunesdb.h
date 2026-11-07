@@ -27,7 +27,15 @@ inline constexpr std::uint32_t kMediaVideo = 2;
 inline constexpr std::uint32_t kMediaPodcast = 4;
 inline constexpr std::uint32_t kMediaAudiobook = 8;
 
+struct TrackArtwork {
+    std::uint32_t imageId = 0;
+    std::uint32_t originalSize = 0;
+};
+
 struct Track {
+    // Transient import/repair state, never a path stored on the iPod.
+    std::filesystem::path artworkSource;
+    std::optional<TrackArtwork> artworkUpdate;
     std::uint32_t id = 0;
     std::string title;
     std::string artist;

@@ -19,11 +19,14 @@ struct DeviceSession {
     int deleteTracks(const std::vector<std::uint32_t>& ids,
         const std::unordered_map<std::uint32_t, std::uint32_t>* remap);
     std::vector<std::pair<std::filesystem::path, Track>> pendingFileTags_;
+    int lastArtworkAdded_ = 0;
 
     bool restoreDatabase(const std::filesystem::path& chosen);
     bool writesSupported() const;
     std::string writeBlockReason() const;
     bool appleMusicSyncing() const;
+    bool databaseChanged() const;
+    void observeDatabaseRevision();
     void verifyChecksum();
     std::filesystem::path dbFilePath() const;
     void rotateBackups(const std::filesystem::path& path);
@@ -50,6 +53,8 @@ struct DeviceSession {
     FingerprintStore fingerprints_;
     std::uint32_t nextTrackId_ = 100;
     std::filesystem::file_time_type ownWriteTime_{};
+    bool databaseRevisionObserved_ = false;
+    std::optional<std::pair<std::filesystem::file_time_type, std::uintmax_t>> databaseRevision_;
     std::unordered_set<std::uint64_t> refreshPlaylistVoiceOver_;
     std::unordered_set<std::uint64_t> removedPlaylistVoiceOver_;
 };

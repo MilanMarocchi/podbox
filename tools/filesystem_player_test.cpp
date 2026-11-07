@@ -268,6 +268,13 @@ int main() {
                           true),
               "an import copies: " + importError);
         check(readAll(dest) == readAll(source), "the import is complete");
+        const auto firstCopy = readAll(dest);
+        std::ofstream(dest, std::ios::binary) << "another import won this name";
+        check(!importAudio(ImportFormat::Original, source, dest, &importError, true) &&
+                  readAll(dest) == "another import won this name",
+              "an occupied player filename is never overwritten");
+        fs::remove(dest);
+        std::ofstream(dest, std::ios::binary).write(firstCopy.data(), firstCopy.size());
         check(!fs::exists(echo / "Music" / ".podbox-partial.imported.wav"),
               "a finished import leaves no partial file");
 

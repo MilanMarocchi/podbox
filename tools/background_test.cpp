@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <future>
+#include <fstream>
 #include <stdexcept>
 #include <thread>
 
@@ -45,6 +46,40 @@ void watcherTest() {
 
 namespace podbox {
 struct AppTestAccess {
+    static void hostSaveFailureTest() {
+        App app(Fonts{});
+        app.hostSaveJob_.start([] { return false; });
+        check(until([&] { return app.hostSaveJob_.ready(); }), "failed host save completes");
+        app.applyBackgroundWork();
+        check(app.hostSaveFailed_, "host save failure remains visible after the worker finishes");
+        // Encoder discovery is unrelated to the close guard under test.
+        check(until([&] { return !app.encoderJob_.busy() || app.encoderJob_.ready(); }), "encoder check completes");
+        app.applyBackgroundWork();
+        check(!app.prepareToClose() && app.closeHostSaveFailedOpen_, "unsaved host changes prevent a silent quit");
+        app.hostSaveJob_.start([] { return true; });
+        check(until([&] { return app.hostSaveJob_.ready(); }), "host save retry completes");
+        app.applyBackgroundWork();
+        check(!app.hostSaveFailed_, "successful retry clears the host save failure");
+    }
+    static void staleDatabaseTest() {
+        const auto root=fs::temp_directory_path()/("podbox-stale-db-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        fs::create_directories(root/"iPod_Control/iTunes");
+        DeviceSession session;
+        session.loadedMount_=root;
+        session.loadedDeviceInfo_.emplace();session.loadedDeviceInfo_->mountPoint=root;
+        session.library_.emplace();
+        const auto file=root/"iPod_Control/iTunes/iTunesDB";
+        std::ofstream(file)<<"first revision";
+        session.observeDatabaseRevision();
+        const std::string newer="a newer library written by another app";
+        std::ofstream(file)<<newer;
+        fs::last_write_time(file,fs::file_time_type::clock::now()-std::chrono::seconds(60));
+        check(!session.appleMusicSyncing(),"fixture is outside the old 20-second busy window");
+        check(session.databaseChanged()&&!session.writeDatabase(),"another writer's old-enough change still blocks a stale save");
+        std::ifstream saved(file);std::string actual;std::getline(saved,actual);
+        check(actual==newer,"a refused stale save leaves the newer database untouched");
+        fs::remove_all(root);
+    }
     static void ejectTest(bool success) {
         App app(Fonts{});
         app.loadedMount_ = "/fake/ipod";
@@ -170,6 +205,8 @@ int main() {
     podbox::AppTestAccess::saveTest();
     podbox::AppTestAccess::ejectWaitsForReads();
     podbox::AppTestAccess::snapshotSaveTest();
+    podbox::AppTestAccess::hostSaveFailureTest();
+    podbox::AppTestAccess::staleDatabaseTest();
     ImGui::DestroyContext();
     std::printf("Background tests: %d failure(s)\n", failures);
     return failures ? 1 : 0;

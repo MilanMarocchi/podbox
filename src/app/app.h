@@ -90,6 +90,8 @@ private:
     std::vector<BackupRow> backupRows_;
     BackgroundJob<bool> hostSaveJob_;
     bool hostSavePending_ = false;
+    bool hostSaveFailed_ = false;
+    bool closeHostSaveFailedOpen_ = false;
     BackgroundJob<std::filesystem::path> folderJob_;
     struct DropResult { std::filesystem::path mount; std::vector<std::filesystem::path> files; };
     BackgroundJob<DropResult> dropJob_;
@@ -390,7 +392,7 @@ private:
         bool dirty = false;
         bool host = false;  // the Mac library rather than the player
         MatchMode mode = MatchMode::Exact;
-        bool identicalOnly = false;
+        bool identicalOnly = true;
         std::vector<DuplicateGroup> groups;
         std::vector<char> enabled;  // per group; char to stay indexable
         VerifyJob verify;

@@ -178,9 +178,11 @@ void SyncEngine::run() {
             } else if (!importAudio(fmt, src, dest, &convErr,
                                     originalSupported)) {
                 result.error = convErr;
-                fs::remove(dest, ec);  // clean up any partial output
+                // importAudio cleans its own staging file. The final name
+                // may now belong to another importer and must be left alone.
             } else {
                 result.track = std::move(meta.track);
+                result.track.artworkSource = src;
                 result.track.location = location;
                 // The on-device file's size differs after transcoding; record
                 // the actual size so the DB and capacity math stay correct.

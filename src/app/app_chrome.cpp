@@ -8,6 +8,7 @@
 #include "device/ipod_device.h"
 #include "itdb/itunesdb.h"
 #include "library/artwork.h"
+#include "itdb/artworkdb.h"
 #include "library/transcode.h"
 #include "ui/aqua.h"
 #include "ui/macos_window.h"
@@ -76,7 +77,7 @@ void App::updateArtwork() {
     if (!artJob_.busy() && !path.empty() && artworkJobPath_ != path &&
         !closeRequested_ && ejectingMount_.empty() && ejectRequestedMount_.empty()) {
         artworkJobPath_ = path;
-        artJob_.start([path] { return loadEmbeddedArtwork(path); });
+        artJob_.start([path] { return loadArtwork(path); });
     }
 }
 
@@ -959,6 +960,15 @@ void App::drawDeviceView(const DeviceInfo& dev) {
         ImGui::BeginDisabled(!restoreSupported());
         if (ImGui::Button("Restore Backup…")) restoreOpen_ = true;
         ImGui::EndDisabled();
+    }
+
+    if (dev.isIpod() && library_ && !ipodArtworkFormats(dev).empty()) {
+        ImGui::Dummy(ImVec2(0, 8));
+        ImGui::BeginDisabled(!writesSupported() || sync_.busy() || deviceJob_.busy());
+        if (ImGui::Button("Fill Missing Album Artwork")) writeDatabase();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Uses covers from your Mac library or the iPod's music files. Existing valid artwork is kept.");
     }
 
     ImGui::Dummy(ImVec2(0, 10));

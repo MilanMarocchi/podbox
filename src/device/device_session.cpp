@@ -8,6 +8,7 @@
 #include "itdb/playcounts.h"
 #include "itdb/itunessd.h"
 #include "library/artwork.h"
+#include "itdb/artworkdb.h"
 #include "library/dedupe.h"
 #include "library/metadata.h"
 #include "library/transcode.h"
@@ -16,8 +17,31 @@
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <stdexcept>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 namespace fs = std::filesystem;
 namespace podbox {
+namespace {
+auto databaseRevision(const fs::path& path)
+    -> std::optional<std::pair<fs::file_time_type, std::uintmax_t>> {
+    std::error_code ec;
+    const bool exists = fs::exists(path, ec);
+    if (ec) throw std::runtime_error("Cannot inspect iPod database: " + ec.message());
+    if (!exists) return std::nullopt;
+    return std::pair(fs::last_write_time(path), fs::file_size(path));
+}
+}
+void DeviceSession::observeDatabaseRevision() {
+    databaseRevision_ = databaseRevision(dbFilePath());
+    databaseRevisionObserved_ = true;
+}
+bool DeviceSession::databaseChanged() const {
+    if (!connectedIpod() || !databaseRevisionObserved_) return false;
+    try { return databaseRevision(dbFilePath()) != databaseRevision_; }
+    catch (...) { return true; }
+}
 bool DeviceSession::appleMusicSyncing() const {
     if (!connectedIpod()) return false;
     if (loadedMount_.empty()) return false;
@@ -277,6 +301,18 @@ bool DeviceSession::writeDatabase() {
         setStatus(writeBlockReason());
         return false;
     }
+    const int lockFd = connectedIpod()
+        ? ::open((loadedMount_ / "iPod_Control/iTunes/.podbox-save.lock").c_str(), O_CREAT | O_RDWR, 0600)
+        : -1;
+    struct CloseSaveLock { int fd; ~CloseSaveLock() { if (fd >= 0) ::close(fd); } } closeSaveLock{lockFd};
+    if (connectedIpod() && (lockFd < 0 || ::flock(lockFd, LOCK_EX | LOCK_NB) != 0)) {
+        setStatus("Could not lock this iPod for saving — another PodBox may be writing");
+        return false;
+    }
+    if (databaseChanged()) {
+        setStatus("The iPod database changed in another app. Reconnect the player before saving.");
+        return false;
+    }
     if (appleMusicSyncing()) {
         setStatus("Apple Music is syncing this iPod — try again when it finishes");
         return false;
@@ -318,6 +354,12 @@ bool DeviceSession::writeDatabase() {
     std::error_code ec;
     const fs::path tmp = dbPath.string() + ".podbox-tmp";
     std::string err;
+    lastArtworkAdded_ = 0;
+    if (const auto* device = activeDevice(); device &&
+        !writeIpodArtwork(*device, *library_, &lastArtworkAdded_, &err)) {
+        setStatus(err);
+        return false;
+    }
     WriteOptions opts;
     if (library_->hashingScheme == kChecksumHash58)
         opts.hash58Guid = hash58Guid_;
@@ -388,6 +430,14 @@ bool DeviceSession::writeDatabase() {
         if (fs::exists(statsPath, ec) && !fs::exists(statsBackup, ec))
             fs::copy_file(statsPath, statsBackup, ec);
         if (fs::exists(statsPath, ec)) rotateBackups(statsPath);
+    }
+    if (databaseChanged()) {
+        fs::remove(tmp, ec);
+        fs::remove_all(sqliteTmp, ec);
+        fs::remove(sdTmp, ec);
+        fs::remove(statsTmp, ec);
+        setStatus("The iPod database changed while saving. Reconnect the player before trying again.");
+        return false;
     }
     fs::rename(tmp, dbPath, ec);
     if (ec) {
@@ -480,6 +530,7 @@ bool DeviceSession::writeDatabase() {
 
     // Remember this write so appleMusicSyncing() can tell ours from theirs.
     ownWriteTime_ = fs::last_write_time(dbPath, ec);
+    observeDatabaseRevision();
     return true;
 }
 
@@ -487,6 +538,7 @@ void DeviceSession::load(const DeviceInfo& device) {
     const DeviceInfo* dev = &device;
     loadedMount_ = device.mountPoint;
     loadedDeviceInfo_ = device;
+    const auto before = device.isIpod() ? databaseRevision(ipodDatabasePath(device.mountPoint)) : std::nullopt;
     recoveryBlockReason_ = device.isIpod() ? ipodRecoveryBlockReason(device) : "Not an iPod";
     if (dev->isIpod()) {
         itunesSdKind_ = detectItunesSd(
@@ -541,6 +593,14 @@ void DeviceSession::load(const DeviceInfo& device) {
         }
     }
 
+    if (device.isIpod() && library_) {
+        observeDatabaseRevision();
+        if (databaseRevision_ != before) {
+            library_.reset();
+            libraryError_ = "The iPod database changed while loading. Reconnect the player.";
+            return;
+        }
+    }
     verifyChecksum();
 }
 
@@ -728,6 +788,10 @@ bool DeviceSession::restoreDatabase(const fs::path& chosen) {
 int DeviceSession::deleteTracks(const std::vector<std::uint32_t>& ids,
     const std::unordered_map<std::uint32_t, std::uint32_t>* remap) {
     if (!library_ || ids.empty()) return 0;
+    if (!writesSupported() || databaseChanged() || appleMusicSyncing()) {
+        setStatus("The player is not ready for deletion. Reconnect it and review the songs again.");
+        return 0;
+    }
 
     std::unordered_set<std::uint32_t> doomed(ids.begin(), ids.end());
     // A track that something is being remapped *to* is by definition a keeper;
@@ -746,7 +810,22 @@ int DeviceSession::deleteTracks(const std::vector<std::uint32_t>& ids,
         std::string relative = location;
         if (!relative.empty() && relative.front() == ':') relative.erase(0, 1);
         std::replace(relative.begin(), relative.end(), ':', '/');
-        fs::remove(loadedMount_ / relative, ec);
+        const fs::path rel = fs::path(relative).lexically_normal();
+        const auto* device = activeDevice();
+        if (rel.empty() || rel.is_absolute() || *rel.begin() == ".." || !device) {
+            failed.insert(id);
+            continue;
+        }
+        const auto root = fs::weakly_canonical(loadedMount_ /
+            (connectedIpod() ? fs::path("iPod_Control/Music") : device->musicDirectory), ec);
+        if (ec) { failed.insert(id); continue; }
+        const auto target = fs::weakly_canonical(loadedMount_ / rel, ec);
+        const auto inside = target.lexically_relative(root);
+        if (ec || inside.empty() || inside == "." || *inside.begin() == "..") {
+            failed.insert(id);
+            continue;
+        }
+        fs::remove(loadedMount_ / rel, ec);
         if (ec) {
             failed.insert(id);
             continue;

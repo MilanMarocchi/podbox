@@ -7,6 +7,9 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -47,6 +50,7 @@ bool isWithinFolder(const std::filesystem::path& file,
                     const std::filesystem::path& root);
 
 struct ScanStats {
+    int restored = 0;    // missing indexed file recovered from its original
     int imported = 0;    // copied in from an import folder
     int added = 0;       // found already in the library folder
     int updated = 0;     // file changed since last scan
@@ -74,6 +78,10 @@ public:
     // means this is a first run.
     bool load();
     bool save() const;
+    // Explicit paths also let recovery tools and tests use isolated indexes.
+    // A corrupt/unreadable index throws; it must never become a new library.
+    bool load(const std::filesystem::path& path);
+    bool save(const std::filesystem::path& path) const;
 
     const std::vector<HostTrack>& tracks() const { return tracks_; }
     std::vector<HostTrack>& tracks() { return tracks_; }
@@ -132,6 +140,15 @@ public:
     static bool isPartialFolder(const std::string& name);
 
 private:
+    struct Persistence {
+        std::mutex mutex;
+        std::filesystem::path path;
+        std::optional<std::string> contents;
+        bool observed = false;
+    };
+    // Worker snapshots share the last successful save, while independent app
+    // instances retain their own revision and cannot overwrite each other.
+    std::shared_ptr<Persistence> persistence_ = std::make_shared<Persistence>();
     std::vector<HostTrack> tracks_;
     std::vector<WatchFolder> watch_;
     std::uint64_t nextId_ = 1;

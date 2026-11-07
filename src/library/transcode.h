@@ -28,7 +28,8 @@ std::string importExtension(ImportFormat fmt,
                             bool originalSupported);
 
 // Copies or transcodes `src` to `dest` (whose extension must equal
-// importExtension(fmt, src)). Returns false with a message in `error`.
+// importExtension(fmt, src)). Never overwrites an existing destination.
+// Returns false with a message in `error`.
 //
 // The output is written beside `dest` under a partial-import name, flushed
 // to the device, then renamed into place, so an interrupted write (unplug,

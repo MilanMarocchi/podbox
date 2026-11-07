@@ -123,6 +123,10 @@ Bytes mhit(const Track& t, std::uint64_t fallbackDbid) {
     // Only a freshly imported track needs one built from nothing.
     Bytes b = t.rawHeader.empty() ? chunk("mhit", 0x148)
                                   : Bytes(t.rawHeader.begin(), t.rawHeader.end());
+    if (t.artworkUpdate && b.size() < 0x164) {
+        b.resize(0x184, 0);
+        set32(b, 4, b.size());
+    }
     // Patch only within the header we actually have.
     auto put32 = [&b](std::size_t off, std::uint32_t v) {
         if (off + 4 <= b.size()) set32(b, off, v);
@@ -151,6 +155,12 @@ Bytes mhit(const Track& t, std::uint64_t fallbackDbid) {
     put32(92, t.discNumber);
     put32(104, toMacTime(t.dateAdded));
     put64(112, t.dbid ? t.dbid : fallbackDbid);
+    if (t.artworkUpdate) {
+        set16(b, 124, 1);
+        put32(128, t.artworkUpdate->originalSize);
+        put8(164, 1);
+        put32(352, t.artworkUpdate->imageId);
+    }
     put32(208, t.mediaType ? t.mediaType : 1);
 
     std::uint32_t nMhods = 0;

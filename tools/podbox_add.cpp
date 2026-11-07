@@ -5,6 +5,7 @@
 #include "device/usb_serial.h"
 #include "device/ipod_device.h"
 #include "itdb/hash58.h"
+#include "itdb/artworkdb.h"
 #include "itdb/hash72.h"
 #include "itdb/hashab.h"
 #include "itdb/itunesdb.h"
@@ -427,10 +428,6 @@ int main(int argc, char **argv) {
         std::string importError;
         if (destination.empty() ||
             !podbox::importAudio(format, source, destination, &importError)) {
-            if (!destination.empty()) {
-                std::error_code cleanupError;
-                fs::remove(destination, cleanupError);
-            }
             std::fprintf(stderr, "skip: %s\n",
                          importError.empty()
                              ? source.filename().string().c_str()
@@ -445,6 +442,7 @@ int main(int argc, char **argv) {
             metadata.track.sizeBytes = size;
         metadata.track.id = nextId++;
         metadata.track.dbid = rng();
+        metadata.track.artworkSource = source;
         metadata.track.location = location;
         library.tracks.push_back(std::move(metadata.track));
         std::printf("added \"%s\" -> %s\n", library.tracks.back().title.c_str(),
@@ -477,6 +475,9 @@ int main(int argc, char **argv) {
         return 1;
     };
 
+    int artworkAdded = 0;
+    if (device && !podbox::writeIpodArtwork(*device, library, &artworkAdded, &error))
+        return fail(error);
     if (!podbox::writeItunesDb(library, dbTmp, &error, signing.options) ||
         !validateStagedDatabase(library, dbTmp, signing, &error)) {
         if (error.empty())

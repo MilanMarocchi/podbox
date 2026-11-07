@@ -91,7 +91,14 @@ as a separate backend; they are not mistaken for filesystem paths.
 - **Play counts & ratings** written by the iPod are merged back into the
   library automatically on connect — and forward into your Mac library, where
   counts only ever increase.
-- **Album artwork** embedded in your files is shown for the selected track.
+- **Album artwork** uses a valid embedded front cover, falling back to
+  `cover`, `folder`, `front` or `album` JPEG/PNG files beside the audio.
+  MP3, FLAC, MP4 AAC/ALAC, WAV and AIFF covers survive conversions. MP3
+  exports keep ID3v2.3 text tags and a bounded JPEG front cover.
+  iPod video/Classic artwork is also written to the device's `ArtworkDB`
+  and RGB565 `.ithmb` files. **Fill Missing Album Artwork** on the device
+  pane repairs missing or truncated thumbnails using Mac originals or the
+  iPod's embedded covers, while retaining valid existing artwork.
 - **Play songs from the iPod on your Mac** — double-click a track (or use the
   transport controls) to play it through your computer's speakers, with a
   now-playing display, seek scrubber, volume, and auto-advance.
@@ -125,7 +132,14 @@ as a separate backend; they are not mistaken for filesystem paths.
   moved or deleted, and folders named `downloading` or `incomplete` are never
   imported. On APFS the copies are clones, so they take almost no extra space.
   Rescanning the library folder is incremental; files that have disappeared
-  from it are *flagged*, not dropped.
+  from it are restored from previously imported originals with matching audio
+  fingerprints when available; otherwise they are *flagged*, not dropped.
+  Equal-size files with the same desired name are compared in full, and
+  concurrent imports cannot overwrite each other.
+- **Recoverable index saves.** The Mac index has a checksum, completeness
+  counts, five rolling backups and atomic writes. Damaged indexes are left
+  untouched; a stale app cannot replace a newer revision. Failed saves stay
+  visible and prevent quitting without an explicit choice.
 - **Import from Apple Music** — PodBox reads your Music.app library through
   AppleScript and **copies** the files out to `~/Music/PodBox/Artist/Album/`.
   It never writes to Apple Music's own folder, which is protected by macOS and
@@ -143,8 +157,9 @@ as a separate backend; they are not mistaken for filesystem paths.
   copies in bulk. The better copy is kept: lossless first, then play count,
   rating, bitrate, file size. On a player, **playlists are never shortened** —
   an entry pointing at a removed copy is rewritten to the one being kept — and
-  you can verify that copies are byte-for-byte identical before removing
-  anything. On the Mac only `~/Music/PodBox/` is ever looked at, removed copies
+  matching sampled audio fingerprints are required by default. Clear that
+  filter to review matches based on tags, including transcodes. On the Mac
+  only `~/Music/PodBox/` is ever looked at, removed copies
   go to the Trash, and album folders left empty are tidied away.
 - **Show in Finder** — open the library folder from the *…* menu on LIBRARY,
   reveal selected songs from their right-click menu, or open any import
@@ -404,6 +419,7 @@ On your Mac:
 | Path | What |
 |---|---|
 | `~/Library/Application Support/PodBox/library.tsv` | the Mac library index, import-folder list and the record of every file already imported |
+| `~/Library/Application Support/PodBox/library.tsv.bak.1` … `.5` | previous successful Mac index revisions |
 | `~/Music/PodBox/` | the Mac library itself: songs copied in from import folders and Apple Music |
 
 On the iPod, all under `iPod_Control/iTunes/`:
@@ -465,7 +481,8 @@ file that is merged on connect.
 ## Roadmap
 
 - Android/MTP transport for newer Sony Walkmans and other MTP players
-- Album artwork **on** the device (`ArtworkDB` + `.ithmb` thumbnails)
+- Artwork generation for nano 6G/7G and models whose thumbnail formats are
+  unknown. Existing artwork on those models is preserved.
 - Podcast episode metadata (description, release date) and audiobook
   resume-position, which need parts of the database PodBox carries through
   verbatim but does not yet model

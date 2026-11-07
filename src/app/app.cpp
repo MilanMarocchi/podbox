@@ -73,6 +73,11 @@ bool App::prepareToClose() {
         duplicateJob_.busy() || hostRemovalJob_.busy() || hostSavePending_ || !pendingHostTags_.empty() ||
         fingerprintSaveJob_.busy() || fingerprintSavePending_ || folderCheckJob_.busy() || encoderJob_.busy() || watcher_.busy()) return false;
     if (closeWithoutSaving_) return true;
+    if (hostSaveFailed_) {
+        closeHostSaveFailedOpen_ = true;
+        closeRequested_ = false;
+        return false;
+    }
     applyCompletedAdds();
     if (deviceJob_.busy()) return false;
     closeSaveFailedOpen_ = pendingDbWrite_;
@@ -86,8 +91,22 @@ bool App::writeDatabase() {
     if (!writesSupported()) { setStatus(writeBlockReason()); return false; }
     pendingDbWrite_ = true;
     deviceJobKind_ = DeviceJobKind::Save;
-    deviceJob_.start([snapshot = static_cast<const DeviceSession&>(*this)]() mutable {
+    deviceJob_.start([snapshot = static_cast<const DeviceSession&>(*this), host = host_]() mutable {
         DeviceResult result;
+        // An existing iPod song may have lost its embedded cover during an
+        // older conversion. Use the matching Mac original to fill that gap.
+        if (snapshot.library_ && snapshot.connectedIpod()) {
+            std::unordered_map<std::string, fs::path> sources;
+            for (const auto& track : host.tracks())
+                if (!track.missing) sources.emplace(duplicateKey(track.meta, MatchMode::Exact), track.file);
+            for (auto& track : snapshot.library_->tracks) {
+                if (!track.artworkSource.empty()) continue;
+                for (const auto& key : lookupKeys(track, MatchMode::Exact)) {
+                    const auto source = sources.find(key);
+                    if (source != sources.end()) { track.artworkSource = source->second; break; }
+                }
+            }
+        }
         snapshot.status.clear();
         result.ok = snapshot.writeDatabase();
         result.session = std::move(snapshot);
@@ -131,6 +150,10 @@ void App::applyDeviceJob() {
         if (result.ok) {
             filesystemState_ = std::move(result.session.filesystemState_);
             ownWriteTime_ = result.session.ownWriteTime_;
+            if (deviceJobKind_ == DeviceJobKind::Save) {
+                databaseRevisionObserved_ = result.session.databaseRevisionObserved_;
+                databaseRevision_ = result.session.databaseRevision_;
+            }
             pendingFileTags_.clear();
             refreshPlaylistVoiceOver_.clear();
             removedPlaylistVoiceOver_.clear();
@@ -142,6 +165,9 @@ void App::applyDeviceJob() {
                                 ? "Removed " + plural(result.removed, "song", "songs")
                                 : "Player database saved");
             lastBatchAdded_ = lastBatchSkipped_ = 0;
+            if (result.session.lastArtworkAdded_)
+                setStatus("Saved player database and filled artwork for " +
+                          plural(result.session.lastArtworkAdded_, "song", "songs"));
         } else {
             batchWriteFailed_ = true;
             pendingDbWrite_ = true;
@@ -230,6 +256,31 @@ void App::frame() {
     drawDuplicatesModal();
     drawRestoreModal();
     drawRecoveryModal();
+    if (closeHostSaveFailedOpen_) {
+        if (!ImGui::IsPopupOpen("Local Library Not Saved"))
+            ImGui::OpenPopup("Local Library Not Saved");
+        if (aqua::beginSheet("Local Library Not Saved", 550.0f)) {
+            aqua::heading(fonts_, "Your library changes have not been saved");
+            aqua::body(fonts_, "Your music files are safe. Check free disk space and close any other copy of PodBox, then retry. If another app changed the index, restart PodBox to load that version.");
+            if (aqua::button("Keep PodBox Open", ImVec2(160, 0))) {
+                closeHostSaveFailedOpen_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (aqua::button("Retry Save", ImVec2(110, 0))) {
+                saveHost();
+                closeHostSaveFailedOpen_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (aqua::button("Quit Without Saving", ImVec2(165, 0))) {
+                closeWithoutSaving_ = true;
+                closeHostSaveFailedOpen_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            aqua::endSheet();
+        }
+    }
     if (closeSaveFailedOpen_) {
         if (!ImGui::IsPopupOpen("Songs Have Not Been Saved"))
             ImGui::OpenPopup("Songs Have Not Been Saved");
@@ -1092,10 +1143,11 @@ void App::applyFinishedScan() {
     pullPlayCountsToHost();
 
     const ScanStats& s = scan_.stats;
-    if (s.imported || s.added || s.updated || s.missing) {
+    if (s.imported || s.added || s.updated || s.missing || s.restored) {
         std::string msg = "Library: " + plural(s.imported + s.added, "song", "songs") +
                           " added";
         if (s.updated) msg += ", " + std::to_string(s.updated) + " updated";
+        if (s.restored) msg += ", " + std::to_string(s.restored) + " restored";
         if (s.missing) msg += ", " + std::to_string(s.missing) + " missing";
         setStatus(msg);
     } else {

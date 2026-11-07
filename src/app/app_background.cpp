@@ -83,8 +83,9 @@ void App::applyBackgroundWork() {
     }
     if (hostSaveJob_.ready()) {
         try {
-            if (!*hostSaveJob_.take()) setStatus("Could not save the local library");
-        } catch (const std::exception& e) { setStatus(e.what()); }
+            hostSaveFailed_ = !*hostSaveJob_.take();
+            if (hostSaveFailed_) setStatus("Local library not saved — check disk space or another running PodBox. Your music files are safe.");
+        } catch (const std::exception& e) { hostSaveFailed_ = true; setStatus(e.what()); }
     }
     if (hostSavePending_ && !hostSaveJob_.busy()) {
         hostSavePending_ = false;

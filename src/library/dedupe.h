@@ -63,7 +63,7 @@ using FingerprintMap = std::unordered_map<std::uint64_t, AudioFingerprint>;
 struct DuplicateGroup {
     std::vector<std::uint32_t> trackIds;  // best copy first; the rest are dupes
     // Every member has a known fingerprint and they all agree, i.e. these are
-    // byte-identical files rather than merely the same song.
+    // matching sampled audio streams. Container tags/artwork may differ.
     bool allIdenticalFiles = false;
     std::uint64_t reclaimBytes = 0;  // freed by removing all but the keeper
 };

@@ -1,12 +1,17 @@
 #include "library/music_folder.h"
 
 #include "library/dedupe.h"  // toLower
+#include "library/artwork.h"
 
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <array>
+#include <cerrno>
+#include <fstream>
+#include <unistd.h>
 #include <vector>
 
 #if defined(__APPLE__)
@@ -18,17 +23,38 @@ namespace fs = std::filesystem;
 namespace podbox {
 namespace {
 
+// Size and tags cannot prove two files are the same recording. In particular,
+// uncompressed tracks often collide on both. Compare the entire file before
+// treating an existing destination as an earlier import.
+bool identicalFiles(const fs::path& a, const fs::path& b) {
+    std::error_code ec;
+    if (fs::equivalent(a, b, ec) && !ec) return true;
+    std::ifstream left(a, std::ios::binary), right(b, std::ios::binary);
+    if (!left || !right) return false;
+    std::array<char, 65536> x{}, y{};
+    do {
+        left.read(x.data(), x.size());
+        right.read(y.data(), y.size());
+        if (left.gcount() != right.gcount() ||
+            !std::equal(x.begin(), x.begin() + left.gcount(), y.begin()))
+            return false;
+    } while (left && right);
+    return left.eof() && right.eof();
+}
+
 // A clone where the filesystem can (APFS, same volume), a plain copy where
 // it cannot. `dst` must not exist.
 bool cloneOrCopy(const fs::path& src, const fs::path& dst, std::string* error) {
 #if defined(__APPLE__)
-    if (copyfile(src.c_str(), dst.c_str(), nullptr, COPYFILE_CLONE) == 0)
+    // dst is our own mkstemp reservation. Unlinking it is necessary for an
+    // APFS clone; the randomized name is never a user's existing song.
+    if (copyfile(src.c_str(), dst.c_str(), nullptr, COPYFILE_CLONE | COPYFILE_UNLINK) == 0)
         return true;
     *error = src.filename().string() + ": " + std::strerror(errno);
     return false;
 #else
     std::error_code ec;
-    if (fs::copy_file(src, dst, ec)) return true;
+    if (fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec)) return true;
     *error = src.filename().string() + ": " + ec.message();
     return false;
 #endif
@@ -94,6 +120,7 @@ bool placeInMusicFolder(const fs::path& src, const Track& meta,
         meta.title.empty() ? src.stem().string() : meta.title;
     const std::string stem = prefix + sanitizeComponent(title);
     const std::string ext = toLower(src.extension().string());
+    if (!copySidecarArtwork(real, dir, error)) return false;
 
     for (int n = 1; n < 1000; ++n) {
         const fs::path candidate =
@@ -101,7 +128,8 @@ bool placeInMusicFolder(const fs::path& src, const Track& meta,
                           : stem + " (" + std::to_string(n) + ")" + ext);
         std::error_code e;
         if (fs::exists(candidate, e)) {
-            if (fs::file_size(candidate, e) == size && !e) {
+            if (fs::file_size(candidate, e) == size && !e &&
+                identicalFiles(real, candidate)) {
                 *dest = candidate;
                 *reused = true;
                 return true;
@@ -110,16 +138,30 @@ bool placeInMusicFolder(const fs::path& src, const Track& meta,
         }
         if (e) break;
 
-        const fs::path tmp = candidate.string() + ".podbox-partial";
-        fs::remove(tmp, e);
+        // Each importer owns its temporary file. Another app/scan cannot
+        // delete this copy in flight or replace a song that won the name race.
+        std::string pattern = candidate.string() + ".podbox-partial.XXXXXX";
+        std::vector<char> name(pattern.begin(), pattern.end());
+        name.push_back(0);
+        const int fd = ::mkstemp(name.data());
+        if (fd < 0) { *error = "cannot stage " + stem + ext; return false; }
+        ::close(fd);
+        const fs::path tmp = name.data();
         if (!cloneOrCopy(real, tmp, error)) {
             fs::remove(tmp, e);
             return false;
         }
-        fs::rename(tmp, candidate, e);
-        if (e) {
-            *error = candidate.filename().string() + ": " + e.message();
+#if defined(__APPLE__)
+        const bool installed = ::renamex_np(tmp.c_str(), candidate.c_str(), RENAME_EXCL) == 0;
+#else
+        const bool installed = ::link(tmp.c_str(), candidate.c_str()) == 0;
+        if (installed) fs::remove(tmp, e);
+#endif
+        if (!installed) {
+            const int failure = errno;
+            *error = candidate.filename().string() + ": " + std::strerror(failure);
             fs::remove(tmp, e);
+            if (failure == EEXIST) { --n; continue; }
             return false;
         }
         *dest = candidate;

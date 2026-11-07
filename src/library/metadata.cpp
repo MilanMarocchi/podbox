@@ -1,6 +1,8 @@
 #include "library/metadata.h"
+#include "library/artwork.h"
 
 #include <fileref.h>
+#include <attachedpictureframe.h>
 #include <id3v2tag.h>
 #include <mp4file.h>
 #include <mpegfile.h>
@@ -8,6 +10,8 @@
 #include <textidentificationframe.h>
 #include <tfilestream.h>
 #include <tpropertymap.h>
+#include <riff/wav/wavfile.h>
+#include <riff/wav/infotag.h>
 
 #include <algorithm>
 #include <ctime>
@@ -91,6 +95,18 @@ FileMeta readFileMetadata(const fs::path& path) {
         t.year = tag->year();
         t.trackNumber = tag->track();
     }
+    // WAV's FileRef tag is ID3v2 even when the file only has RIFF INFO tags.
+    // Adding a picture to an empty ID3 tag must not hide its text metadata.
+    if (const auto* wav = dynamic_cast<TagLib::RIFF::WAV::File*>(f.file())) {
+        if (const auto* info = wav->InfoTag()) {
+            if (t.title.empty()) t.title = info->title().to8Bit(true);
+            if (t.artist.empty()) t.artist = info->artist().to8Bit(true);
+            if (t.album.empty()) t.album = info->album().to8Bit(true);
+            if (t.genre.empty()) t.genre = info->genre().to8Bit(true);
+            if (!t.year) t.year = info->year();
+            if (!t.trackNumber) t.trackNumber = info->track();
+        }
+    }
     if (t.title.empty()) t.title = path.stem().string();
 
     const TagLib::AudioProperties* props = f.audioProperties();
@@ -131,6 +147,9 @@ bool writeFileTags(const fs::path& path, const Track& meta,
 
 bool writePlayerSafeMp3Tags(const fs::path& src, const fs::path& dest,
                             std::string* error) {
+    // Extract before opening dest for write: retagging in place must not
+    // remove the only copy of the cover. Keep APIC after the text fields.
+    const auto artwork = playerArtwork(src);
     static const char* const kKeys[] = {"TITLE",       "ARTIST",
                                         "ALBUM",       "ALBUMARTIST",
                                         "TRACKNUMBER", "DISCNUMBER",
@@ -147,6 +166,19 @@ bool writePlayerSafeMp3Tags(const fs::path& src, const fs::path& dest,
                 if (found != all.end() && !found->second.isEmpty())
                     wanted.insert(key, TagLib::StringList(found->second.front()));
             }
+        }
+    }
+
+    const auto meta = readFileMetadata(src);
+    if (meta.ok) {
+        const auto& t = meta.track;
+        for (const auto& [key, value] : std::vector<std::pair<std::string, std::string>>{
+                 {"TITLE", t.title}, {"ARTIST", t.artist}, {"ALBUM", t.album}, {"GENRE", t.genre},
+                 {"DATE", t.year ? std::to_string(t.year) : ""},
+                 {"TRACKNUMBER", t.trackNumber ? std::to_string(t.trackNumber) : ""}}) {
+            const TagLib::String k(key, TagLib::String::UTF8);
+            if (!value.empty() && !wanted.contains(k))
+                wanted.insert(k, TagLib::StringList(TagLib::String(value, TagLib::String::UTF8)));
         }
     }
 
@@ -167,6 +199,14 @@ bool writePlayerSafeMp3Tags(const fs::path& src, const fs::path& dest,
         if (auto* text =
                 dynamic_cast<TagLib::ID3v2::TextIdentificationFrame*>(frame))
             text->setTextEncoding(TagLib::String::UTF16);
+    if (!artwork.empty()) {
+        auto* picture = new TagLib::ID3v2::AttachedPictureFrame;
+        picture->setType(TagLib::ID3v2::AttachedPictureFrame::FrontCover);
+        picture->setMimeType("image/jpeg");
+        picture->setPicture(TagLib::ByteVector(
+            reinterpret_cast<const char*>(artwork.data()), artwork.size()));
+        tag->addFrame(picture);
+    }
     if (!f.save(TagLib::MPEG::File::ID3v2, TagLib::File::StripOthers,
                 TagLib::ID3v2::v3, TagLib::File::DoNotDuplicate)) {
         if (error) *error = dest.filename().string() + ": could not save tags";

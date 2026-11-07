@@ -30,6 +30,10 @@ struct HostRemoval {
     std::uint64_t id = 0;
     std::filesystem::path file;
     std::filesystem::path keeper;
+    std::string reviewedKey;
+    MatchMode mode = MatchMode::Exact;
+    AudioFingerprint fileFingerprint;
+    AudioFingerprint keeperFingerprint;
 };
 
 struct HostRemovalResult {

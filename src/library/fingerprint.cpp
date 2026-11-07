@@ -158,15 +158,39 @@ Range audioRange(std::ifstream& in, std::uint64_t size) {
         return r;
     }
 
+    const bool wav = haveMagic && std::memcmp(magic, "RIFF", 4) == 0 &&
+                     std::memcmp(magic + 8, "WAVE", 4) == 0;
+    const bool aiff = haveMagic && std::memcmp(magic, "FORM", 4) == 0 &&
+                     (std::memcmp(magic + 8, "AIFF", 4) == 0 || std::memcmp(magic + 8, "AIFC", 4) == 0);
+    if (wav || aiff) {
+        // ID3/INFO cover and text chunks may be appended to either container.
+        // Hash data/SSND only so retagging never changes the audio identity.
+        for (std::uint64_t pos = r.begin + 12; pos <= r.end && r.end - pos >= 8;) {
+            unsigned char h[16]{};
+            if (!readAt(in, pos, h, 8)) break;
+            const std::uint64_t n = wav
+                ? std::uint32_t(h[4]) | (std::uint32_t(h[5]) << 8) |
+                  (std::uint32_t(h[6]) << 16) | (std::uint32_t(h[7]) << 24)
+                : be32(h + 4);
+            if (n > r.end - pos - 8) break;
+            if (wav && std::memcmp(h, "data", 4) == 0) return {pos + 8, pos + 8 + n};
+            if (aiff && std::memcmp(h, "SSND", 4) == 0 && n >= 8 && readAt(in, pos + 8, h, 8)) {
+                const auto offset = be32(h);
+                if (offset <= n - 8) return {pos + 16 + offset, pos + 8 + n};
+            }
+            pos += 8 + n + (n & 1);
+        }
+    }
+
     // MP3 and anything unrecognised: strip tail tags and hash the rest.
     trimTrailingTags(in, r.begin, &r.end);
     return r;
 }
 
-void hashWindow(std::ifstream& in, std::uint64_t off, std::uint64_t len,
+bool hashWindow(std::ifstream& in, std::uint64_t off, std::uint64_t len,
                 std::uint64_t* h) {
     std::vector<unsigned char> buf(std::size_t(len), 0);
-    if (!readAt(in, off, buf.data(), buf.size())) return;
+    if (!readAt(in, off, buf.data(), buf.size())) return false;
 
     std::size_t i = 0;
     for (; i + 8 <= buf.size(); i += 8) {
@@ -178,6 +202,7 @@ void hashWindow(std::ifstream& in, std::uint64_t off, std::uint64_t len,
     for (std::size_t k = 0; i < buf.size(); ++i, ++k)
         tail |= std::uint64_t(buf[i]) << (k * 8);
     *h = mix(*h ^ mix(tail));
+    return true;
 }
 
 }  // namespace
@@ -200,11 +225,11 @@ AudioFingerprint fingerprintFile(const fs::path& path) {
     // different-length files diverge even if a window read fails.
     std::uint64_t h = mix(len);
     if (len <= kWindow * 3) {
-        hashWindow(in, r.begin, len, &h);
+        if (!hashWindow(in, r.begin, len, &h)) return {};
     } else {
-        hashWindow(in, r.begin, kWindow, &h);
-        hashWindow(in, r.begin + len / 2 - kWindow / 2, kWindow, &h);
-        hashWindow(in, r.end - kWindow, kWindow, &h);
+        if (!hashWindow(in, r.begin, kWindow, &h) ||
+            !hashWindow(in, r.begin + len / 2 - kWindow / 2, kWindow, &h) ||
+            !hashWindow(in, r.end - kWindow, kWindow, &h)) return {};
     }
 
     fp.bytes = len;

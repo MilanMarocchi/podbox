@@ -1,6 +1,7 @@
 #include "library/transcode.h"
 
 #include "library/metadata.h"
+#include "library/artwork.h"
 
 #include <algorithm>
 #include <atomic>
@@ -8,6 +9,7 @@
 #include <cstdlib>
 
 #include <fcntl.h>
+#include <cstdio>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -94,19 +96,17 @@ bool toAac(const fs::path& src, const fs::path& dest) {
     if (haveTool("ffmpeg")) {
         // Apple's encoder is noticeably better than ffmpeg's native one at
         // the same bitrate; the native one is the fallback off macOS.
-        const std::string encoder = aacAudioToolboxAvailable()
-                                        ? "aac_at -aac_at_mode cvbr"
-                                        : "aac";
         const std::string head = "ffmpeg -y -v error -i " +
                                  shellQuote(src.string()) + " -map 0:a:0";
-        const std::string audio =
-            " -codec:a " + encoder + " -b:a 256k" + resample;
-        if (run(head + " -map '0:v:0?'" + audio +
-                " -codec:v copy -disposition:v:0 attached_pic " +
-                shellQuote(dest.string())))
-            return true;
-        // MP4 only carries JPEG/PNG cover art; drop anything else.
-        return run(head + audio + " -vn " + shellQuote(dest.string()));
+        // Artwork is selected, normalized and written by TagLib after audio
+        // conversion, identically for ffmpeg and the afconvert fallback.
+        if (aacAudioToolboxAvailable() &&
+            run(head + " -codec:a aac_at -aac_at_mode cvbr -b:a 256k" +
+                resample + " -vn " + shellQuote(dest.string()))) return true;
+        // Listing an encoder does not prove AudioToolbox can initialize it
+        // (for example in a restricted process). Retry with the native encoder.
+        return run(head + " -codec:a aac -b:a 256k" + resample +
+                   " -vn " + shellQuote(dest.string()));
     }
 
     if (!run("/usr/bin/afconvert -f m4af -d aac@" + std::to_string(rate) +
@@ -166,7 +166,9 @@ std::uint32_t sourceBitrateKbps(const fs::path& src) {
 constexpr const char* kPartialPrefix = ".podbox-partial.";
 
 fs::path partialPath(const fs::path& dest) {
-    return dest.parent_path() / (kPartialPrefix + dest.filename().string());
+    static std::atomic<unsigned> serial{0};
+    return dest.parent_path() / (kPartialPrefix + std::to_string(::getpid()) + "." +
+        std::to_string(serial++) + "." + dest.filename().string());
 }
 
 // Pushes a file's data out to the device. On macOS plain fsync() only
@@ -307,18 +309,36 @@ bool importAudio(ImportFormat fmt, const fs::path& src, const fs::path& dest,
 
 bool importAudio(ImportFormat fmt, const fs::path& src, const fs::path& dest,
                  std::string* error, bool originalSupported) {
+    if (error) error->clear();
     const fs::path partial = partialPath(dest);
     std::error_code ec;
-    fs::remove(partial, ec);  // left by an earlier, interrupted import
-    bool ok = writeImport(fmt, src, partial, originalSupported) &&
-              flushToDisk(partial);
+    bool ok = writeImport(fmt, src, partial, originalSupported);
+    const bool converted = fmt == ImportFormat::Alac || fmt == ImportFormat::Mp3 ||
+        (fmt == ImportFormat::Original ? !originalSupported :
+            losslessToAacConverts(src, sourceBitrateKbps(src), originalSupported));
+    // MP3s are already tagged and given a cover on the Mac before the copy.
+    const bool taggedMp3 = fmt == ImportFormat::Mp3 && partial.extension() == ".mp3";
+    if (ok && converted && !taggedMp3) {
+        const auto meta = readFileMetadata(src);
+        ok = meta.ok && writeFileTags(partial, meta.track, error) &&
+             copyArtwork(src, partial, error);
+    } else if (ok && !converted && !loadEmbeddedArtwork(src).ok()) {
+        // Sidecar images otherwise get left behind when only audio is copied.
+        ok = copyArtwork(src, partial, error);
+    }
+    if (ok) ok = flushToDisk(partial);
     if (ok) {
-        fs::rename(partial, dest, ec);
-        ok = !ec;
+#ifdef __APPLE__
+        ok = ::renamex_np(partial.c_str(), dest.c_str(), RENAME_EXCL) == 0;
+#else
+        ok = ::link(partial.c_str(), dest.c_str()) == 0;
+        if (ok) fs::remove(partial, ec);
+#endif
+        if (!ok && error) *error = dest.filename().string() + ": destination already exists or could not be installed";
     }
     if (!ok) {
         fs::remove(partial, ec);
-        if (error)
+        if (error && error->empty())
             *error = src.filename().string() + ": import/conversion failed";
     }
     return ok;

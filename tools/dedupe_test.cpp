@@ -342,6 +342,28 @@ void testHostRemoval() {
           "a second name for the keeper is not trashed");
     check(fs::exists(music / "f.mp3"), "a refused file stays put");
 
+    touch(music / "cycle-a.mp3");
+    touch(music / "cycle-b.mp3");
+    const auto cycle = removeHostDuplicates({
+        {10, music / "cycle-a.mp3", music / "cycle-b.mp3"},
+        {11, music / "cycle-b.mp3", music / "cycle-a.mp3"}}, {music}, fakeTrash);
+    check(cycle.trashed == 0 && cycle.kept == 2 &&
+          fs::exists(music / "cycle-a.mp3") && fs::exists(music / "cycle-b.mp3"),
+          "overlapping removal groups cannot trash each other's keepers");
+    touch(music / "changed.mp3");
+    const auto changed = removeHostDuplicates({
+        {12, music / "changed.mp3", music / "b.mp3", "a|song|album|100"}}, {music}, fakeTrash);
+    check(changed.kept == 1 && fs::exists(music / "changed.mp3"),
+          "a stale review does not trash files whose current tags cannot be verified");
+    touch(other / "outside.mp3");
+    fs::create_directory_symlink(other, music / "escape", ec);
+    if (!ec) {
+        const auto escaped = removeHostDuplicates({
+            {13, music / "escape/outside.mp3", music / "b.mp3"}}, {music}, fakeTrash);
+        check(escaped.trashed == 0 && fs::exists(other / "outside.mp3"),
+              "a symlinked directory cannot give deletion authority outside the library");
+    }
+
     fs::remove_all(root, ec);
 }
 

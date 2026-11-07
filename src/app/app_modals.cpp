@@ -801,7 +801,7 @@ void App::refreshDuplicates() {
 }
 
 void App::startHostRemoval() {
-    if (hostBusy()) return;
+    if (hostBusy() || dupes_.dirty || duplicateJob_.busy()) return;
     std::vector<HostRemoval> items;
     for (std::size_t i = 0; i < dupes_.groups.size(); ++i) {
         if (!dupes_.enabled[i]) continue;
@@ -813,7 +813,10 @@ void App::startHostRemoval() {
             const auto it = hostIndexById_.find(ids[k]);
             if (it == hostIndexById_.end()) continue;
             const Track& t = hostView_.tracks[it->second];
-            items.push_back({t.dbid, t.location, kept.location});
+            items.push_back({t.dbid, t.location, kept.location,
+                             duplicateKey(t, dupes_.mode), dupes_.mode,
+                             host_.tracks()[it->second].fp,
+                             host_.tracks()[keeper->second].fp});
         }
     }
     if (items.empty()) return;
@@ -896,7 +899,7 @@ void App::drawDuplicatesModal() {
                            : "artist and title only — will group live and "
                              "studio versions of a song");
 
-    if (ImGui::Checkbox("Only byte-identical copies", &dupes_.identicalOnly))
+    if (ImGui::Checkbox("Only matching audio fingerprints", &dupes_.identicalOnly))
         dupes_.dirty = true;
     // The Mac library is fingerprinted as it is scanned, so only a player's
     // files ever need a separate pass.
@@ -936,8 +939,8 @@ void App::drawDuplicatesModal() {
         ImGui::Dummy(ImVec2(0, 12));
         ImGui::TextDisabled(
             dupes_.identicalOnly
-                ? "No byte-identical duplicates. Transcoded copies never match "
-                  "byte-for-byte — clear the checkbox to see them."
+                ? "No duplicates with matching audio fingerprints. Clear the "
+                  "checkbox to review matches based on tags, including transcodes."
                 : "No duplicates found.");
     }
     for (std::size_t i = 0; i < dupes_.groups.size(); ++i) {
@@ -971,7 +974,7 @@ void App::drawDuplicatesModal() {
                     where.c_str(), t.playCount);
             }
             if (g.allIdenticalFiles)
-                aqua::body(fonts_, "        these files are byte-identical");
+                aqua::body(fonts_, "        these files have matching audio fingerprints");
             ImGui::TreePop();
         }
         ImGui::PopID();
@@ -988,7 +991,8 @@ void App::drawDuplicatesModal() {
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    const bool canRemove = totalCopies > 0 && !(dupes_.host && hostBusy());
+    const bool canRemove = totalCopies > 0 && !dupes_.dirty && !duplicateJob_.busy() &&
+                           !(dupes_.host && hostBusy());
     ImGui::BeginDisabled(!canRemove);
     if (dupes_.host) {
         if (aqua::button("Move to Trash", ImVec2(110, 0), canRemove)) {

@@ -20,8 +20,8 @@ std::string sanitizeComponent(const std::string& s);
 // where it landed.
 //
 // Never overwrites. A file already at the name is taken to be this song when
-// it is the same size (an earlier run's copy, so `reused` is set and nothing
-// is copied); anything else moves this one along to "NN Title (2).ext".
+// its complete contents match (an earlier run's copy, so `reused` is set and
+// nothing is copied); anything else moves this one along to "NN Title (2).ext".
 // Copies go through a temporary name, so an interrupted run never leaves a
 // truncated file under a real one. Within one APFS volume the copy is a
 // clone, sharing storage with the original.
