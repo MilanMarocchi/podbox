@@ -64,6 +64,13 @@ as a separate backend; they are not mistaken for filesystem paths.
   list below; the search box narrows all three. Drag its bottom edge to resize.
 - **Shuffle and repeat**, from the buttons at the bottom left, alongside a
   toggle for the Now Playing artwork well.
+- **Artwork window.** Click the cover in the sidebar to open it in a window
+  of its own that follows Now Playing and resizes freely. Esc or ⌘W closes
+  it.
+- **Remembers how you left it.** The window's size and position (and whether
+  it was zoomed), the artwork window, volume, shuffle and repeat, the import
+  format, the column browser, and the track list's column widths, order and
+  sort are restored on the next launch.
 - **Add songs** by dragging files or folders onto the window. Metadata is read
   with TagLib and files are copied into the iPod's music folders with
   iTunes-style scrambled names. Copies run on a background thread with progress
@@ -420,6 +427,7 @@ On your Mac:
 |---|---|
 | `~/Library/Application Support/PodBox/library.tsv` | the Mac library index, import-folder list and the record of every file already imported |
 | `~/Library/Application Support/PodBox/library.tsv.bak.1` … `.5` | previous successful Mac index revisions |
+| `~/Library/Application Support/PodBox/settings.ini` | window size and position, and UI settings |
 | `~/Music/PodBox/` | the Mac library itself: songs copied in from import folders and Apple Music |
 
 On the iPod, all under `iPod_Control/iTunes/`:

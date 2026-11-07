@@ -18,6 +18,7 @@
 #include "sync/sync_plan.h"
 #include "sync/verify_job.h"
 #include "ui/theme.h"
+#include "util/settings.h"
 
 #include <atomic>
 #include <memory>
@@ -65,6 +66,11 @@ public:
     void play();
     void pause();
     void togglePlayback();
+
+    // The UI choices kept between launches. main() owns the file and the
+    // window frame; these move the rest in and out of the App.
+    void restoreSettings(const Settings& settings);
+    void captureSettings(Settings& settings) const;
 
 private:
     friend struct AppTestAccess;
@@ -224,6 +230,9 @@ private:
     void selectOnly(std::uint32_t trackId);
     void updateArtwork();
     void drawArtworkPane(float sidebarHeight);
+    // The separate artwork window, which shows the same cover as the pane.
+    void openArtworkWindow(bool activate);
+    void updateArtworkWindow();
     void updatePlayback();
     void playTrackId(std::uint32_t trackId);
     // The track currently playing, whichever library it came from. Playback
@@ -414,6 +423,11 @@ private:
         unsigned int texture = 0;
         std::uint32_t trackId = 0;
         bool hasImage = false;
+        // Kept for the artwork window, which shows it at full size.
+        ArtImage image;
+        std::string title;
+        bool windowDirty = false;
+        bool reopenWindow = false;  // restored at launch, opened on frame one
     };
     ArtworkPreview art_;
 

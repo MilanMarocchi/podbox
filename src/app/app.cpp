@@ -17,6 +17,7 @@
 #include "library/metadata.h"
 #include "library/transcode.h"
 #include "ui/aqua.h"
+#include "ui/macos_window.h"
 #include "ui/theme.h"
 #include "util/finder.h"
 
@@ -768,6 +769,31 @@ void App::togglePlayback() {
         pause();
     else
         play();
+}
+
+void App::restoreSettings(const Settings& s) {
+    if (s.volume && player_) player_->setVolume(*s.volume);
+    shuffle_ = s.shuffle;
+    repeat_ = Repeat(std::clamp(s.repeat, 0, 2));
+    importFormat_ = ImportFormat(std::clamp(s.importFormat, 0, 3));
+    skipDuplicates_ = s.skipDuplicates;
+    artworkPaneOpen_ = s.artworkPaneOpen;
+    browser_.visible = s.browserVisible;
+    browser_.height = s.browserHeight;
+    art_.reopenWindow = s.artworkWindowOpen && artworkWindowSupported();
+}
+
+void App::captureSettings(Settings& s) const {
+    if (player_) s.volume = player_->volume();
+    s.shuffle = shuffle_;
+    s.repeat = int(repeat_);
+    s.importFormat = int(importFormat_);
+    s.skipDuplicates = skipDuplicates_;
+    s.artworkPaneOpen = artworkPaneOpen_;
+    s.browserVisible = browser_.visible;
+    s.browserHeight = browser_.height;
+    // Still owed a reopen if the app quits before its first frame.
+    s.artworkWindowOpen = art_.reopenWindow || artworkWindowOpen();
 }
 
 void App::updatePlayback() {

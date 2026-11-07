@@ -166,7 +166,8 @@ add_library(podbox_core STATIC
   src/library/transcode.cpp
   src/sync/sync_engine.cpp
   src/sync/sync_plan.cpp
-  src/sync/verify_job.cpp)
+  src/sync/verify_job.cpp
+  src/util/settings.cpp)
 target_include_directories(podbox_core PUBLIC src
   ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
@@ -264,6 +265,9 @@ target_link_libraries(library_test PRIVATE podbox_core)
 
 add_executable(music_folder_test tools/music_folder_test.cpp)
 target_link_libraries(music_folder_test PRIVATE podbox_core)
+
+add_executable(settings_test tools/settings_test.cpp)
+target_link_libraries(settings_test PRIVATE podbox_core)
 
 add_executable(artwork_test tools/artwork_test.cpp)
 target_include_directories(artwork_test PRIVATE ${TAGLIB_INCLUDES} ${stb_SOURCE_DIR})
@@ -372,6 +376,7 @@ endif()
 enable_testing()
 add_test(NAME dedupe COMMAND dedupe_test)
 add_test(NAME music_folder COMMAND music_folder_test)
+add_test(NAME settings COMMAND settings_test)
 add_test(NAME artwork COMMAND artwork_test)
 add_test(NAME ipod_artwork COMMAND ipod_artwork_test)
 set_tests_properties(artwork PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 90)

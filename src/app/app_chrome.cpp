@@ -56,11 +56,25 @@ void App::updateArtwork() {
         artworkPath_ = path;
         art_.trackId = track ? want : 0;
         art_.hasImage = false;
+        // The window keeps the old cover until the new one has decoded,
+        // rather than flashing "No Artwork" between every song.
+        art_.title = !track                 ? std::string()
+                     : track->album.empty()  ? track->title
+                     : track->artist.empty() ? track->album
+                                             : track->artist + " — " + track->album;
+        if (path.empty()) {
+            art_.image = {};
+            art_.windowDirty = true;
+        }
     }
     if (artJob_.ready()) {
         ArtImage img;
         try { img = std::move(*artJob_.take()); } catch (...) {}
         // Selection can change while decoding. Never install stale artwork.
+        if (artworkJobPath_ == artworkPath_) {
+            art_.windowDirty = true;
+            if (!img.ok()) art_.image = {};
+        }
         if (artworkJobPath_ == artworkPath_ && img.ok()) {
             if (art_.texture == 0) glGenTextures(1, &art_.texture);
             glBindTexture(GL_TEXTURE_2D, art_.texture);
@@ -72,6 +86,7 @@ void App::updateArtwork() {
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, img.width, img.height, 0,
                          GL_RGBA, GL_UNSIGNED_BYTE, img.rgba.data());
             art_.hasImage = true;
+            art_.image = std::move(img);
         }
     }
     if (!artJob_.busy() && !path.empty() && artworkJobPath_ != path &&
@@ -79,6 +94,28 @@ void App::updateArtwork() {
         artworkJobPath_ = path;
         artJob_.start([path] { return loadArtwork(path); });
     }
+    updateArtworkWindow();
+}
+
+void App::openArtworkWindow(bool activate) {
+    if (!artworkWindowSupported()) return;
+    showArtworkWindow(activate);
+    art_.windowDirty = true;
+    updateArtworkWindow();
+}
+
+void App::updateArtworkWindow() {
+    if (art_.reopenWindow) {
+        art_.reopenWindow = false;
+        openArtworkWindow(false);
+        return;
+    }
+    if (!art_.windowDirty || !artworkWindowOpen()) return;
+    art_.windowDirty = false;
+    const bool ok = art_.image.ok();
+    setArtworkWindowImage(ok ? art_.image.rgba.data() : nullptr,
+                          art_.image.width, art_.image.height,
+                          art_.title.c_str());
 }
 
 void App::drawArtworkPane(float sidebarHeight) {
@@ -104,6 +141,23 @@ void App::drawArtworkPane(float sidebarHeight) {
                         art_.trackId ? "No artwork" : "");
     }
     dl->AddRect(p, ImVec2(p.x + box, p.y + box), pal::ArtworkBorder, 2.0f);
+
+    // iTunes opened the cover in a window of its own when you clicked it.
+    if (!artworkWindowSupported()) return;
+    const ImVec2 resume = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(p);
+    if (ImGui::InvisibleButton("##artwork", ImVec2(box, box)))
+        openArtworkWindow(true);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        ImGui::SetTooltip("Click to open the artwork in its own window");
+    }
+    if (ImGui::BeginPopupContextItem("##artworkmenu")) {
+        if (ImGui::MenuItem("Open in Separate Window")) openArtworkWindow(true);
+        if (ImGui::MenuItem("Hide Artwork Pane")) artworkPaneOpen_ = false;
+        ImGui::EndPopup();
+    }
+    ImGui::SetCursorScreenPos(resume);
 }
 
 void App::drawTransport() {
@@ -452,8 +506,8 @@ void App::drawSidebar(float height) {
                 ImVec2(wp.x + kSidebarWidth - 0.5f, wp.y + height),
                 pal::SidebarBorder);
 
-    const bool haveLib = library_.has_value();
-    const float listHeight = (haveLib && artworkPaneOpen_)
+    // The Mac library has covers too, so the pane does not wait for an iPod.
+    const float listHeight = artworkPaneOpen_
                                  ? std::max(60.0f, height - kArtPane)
                                  : height;
     ImGui::BeginChild("sidebar_list", ImVec2(kSidebarWidth, listHeight));
@@ -680,7 +734,7 @@ void App::drawSidebar(float height) {
 
     ImGui::EndChild();
 
-    if (haveLib && artworkPaneOpen_) drawArtworkPane(height);
+    if (artworkPaneOpen_) drawArtworkPane(height);
 
     ImGui::EndChild();
     ImGui::PopStyleColor();
@@ -850,9 +904,9 @@ void App::drawColumnBrowser(float width) {
     ImGui::EndChild();
     ImGui::PopStyleColor();
 
-    // Splitter. Session-lived: there is no UI settings file, and inventing one
-    // for a divider position is not worth it. Back on the parent's draw list
-    // now that the child has been closed.
+    // Splitter. Its position is kept in settings.ini with the rest of the
+    // layout. Back on the parent's draw list now that the child has been
+    // closed.
     dl = ImGui::GetWindowDrawList();
     const ImVec2 sp = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton("##browser_split", ImVec2(width, 5.0f));
