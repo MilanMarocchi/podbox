@@ -216,6 +216,7 @@ add_executable(podbox MACOSX_BUNDLE
   src/app/app.cpp
   src/app/app_background.cpp
   src/app/app_chrome.cpp
+  src/app/app_grid.cpp
   src/app/app_modals.cpp
   src/app/app_util.cpp
   src/ui/aqua.cpp
@@ -301,7 +302,7 @@ target_link_libraries(ui_test PRIVATE podbox_core imgui_lib)
 # invoke the system eject command or touch a connected device.
 add_executable(background_test tools/background_test.cpp
   src/app/app.cpp src/app/app_background.cpp src/app/app_chrome.cpp
-  src/app/app_modals.cpp src/app/app_util.cpp src/ui/aqua.cpp src/ui/theme.cpp
+  src/app/app_grid.cpp src/app/app_modals.cpp src/app/app_util.cpp src/ui/aqua.cpp src/ui/theme.cpp
   src/audio/player_null.cpp src/ui/macos_window_stub.cpp
   src/util/finder_stub.cpp)
 target_link_libraries(background_test PRIVATE podbox_core imgui_lib)

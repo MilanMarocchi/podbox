@@ -117,6 +117,16 @@ inline constexpr ImU32 StatusText = rgb(88, 92, 98);
 inline constexpr ImU32 ArtworkWell = rgb(255, 255, 255);
 inline constexpr ImU32 ArtworkBorder = rgb(168, 174, 182);
 
+// The album grid: a cover's drop shadow, the grey well a cover without art
+// shows, and the panel an opened album's songs drop into.
+inline constexpr ImU32 CoverShadow = IM_COL32(0, 0, 0, 36);
+inline constexpr ImU32 CoverPlaceholderTop = rgb(236, 238, 241);
+inline constexpr ImU32 CoverPlaceholderBottom = rgb(206, 210, 216);
+inline constexpr ImU32 CoverPlaceholderGlyph = rgb(168, 173, 181);
+inline constexpr ImU32 AlbumPanelTop = rgb(229, 233, 239);
+inline constexpr ImU32 AlbumPanelBottom = rgb(240, 242, 246);
+inline constexpr ImU32 AlbumPanelBorder = rgb(186, 192, 201);
+
 inline constexpr ImU32 SheetBg = rgb(237, 237, 237);
 inline constexpr ImU32 SheetBorder = rgb(126, 129, 133);
 }  // namespace pal

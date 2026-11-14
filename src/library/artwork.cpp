@@ -152,6 +152,33 @@ ArtImage loadArtwork(const fs::path& path) {
     }
     return {};
 }
+ArtImage loadArtworkThumbnail(const fs::path& path, int maxEdge) {
+    ArtImage art = loadArtwork(path);
+    if (!art.ok() || maxEdge <= 0 || std::max(art.width, art.height) <= maxEdge)
+        return art;
+    const double scale = double(maxEdge) / std::max(art.width, art.height);
+    ArtImage out;
+    out.width = std::max(1, int(art.width * scale));
+    out.height = std::max(1, int(art.height * scale));
+    out.rgba.resize(std::size_t(out.width) * out.height * 4);
+    // Box filter: every source pixel lands in exactly one destination pixel.
+    for (int y = 0; y < out.height; ++y)
+        for (int x = 0; x < out.width; ++x) {
+            const int x0 = x * art.width / out.width, x1 = (x + 1) * art.width / out.width;
+            const int y0 = y * art.height / out.height, y1 = (y + 1) * art.height / out.height;
+            std::uint64_t sums[4]{};
+            for (int sy = y0; sy < y1; ++sy)
+                for (int sx = x0; sx < x1; ++sx) {
+                    const auto* p = &art.rgba[(std::size_t(sy) * art.width + sx) * 4];
+                    for (int c = 0; c < 4; ++c) sums[c] += p[c];
+                }
+            const std::uint64_t n = std::uint64_t(x1 - x0) * (y1 - y0);
+            for (int c = 0; c < 4; ++c)
+                out.rgba[(std::size_t(y) * out.width + x) * 4 + c] =
+                    static_cast<unsigned char>(sums[c] / n);
+        }
+    return out;
+}
 std::vector<unsigned char> playerArtwork(const fs::path& path) {
     const auto art = loadArtwork(path);
     if (!art.ok())

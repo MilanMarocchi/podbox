@@ -64,6 +64,9 @@ as a separate backend; they are not mistaken for filesystem paths.
   list below; the search box narrows all three. Drag its bottom edge to resize.
 - **Shuffle and repeat**, from the buttons at the bottom left, alongside a
   toggle for the Now Playing artwork well.
+- **Album grid.** The List | Grid switch beside the search field lays the
+  same songs out as album covers. Click a cover to open its songs below it;
+  double-click a song, or the cover, to play.
 - **Artwork window.** Click the cover in the sidebar to open it in a window
   of its own that follows Now Playing and resizes freely. Esc or ⌘W closes
   it.

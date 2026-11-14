@@ -29,6 +29,7 @@ struct Settings {
     bool skipDuplicates = true;
     bool artworkPaneOpen = true;
     bool browserVisible = true;
+    bool gridLayout = false;  // album grid rather than the track list
     float browserHeight = 170.0f;
 
     // ImGui's [Table] ini sections: column widths, order, visibility and the

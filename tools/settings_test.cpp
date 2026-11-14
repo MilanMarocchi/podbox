@@ -37,6 +37,7 @@ void roundTrip() {
     s.skipDuplicates = false;
     s.artworkPaneOpen = false;
     s.browserVisible = false;
+    s.gridLayout = true;
     s.browserHeight = 240.0f;
     s.tableLayout =
         "[Table][0x1234ABCD,8]\nRefScale=13\nColumn 0  Width=34 Sort=0v\n";

@@ -18,6 +18,9 @@ ArtImage loadEmbeddedArtwork(const std::filesystem::path& audioFile);
 
 // Falls back to cover/folder/front/album JPEG or PNG in the same directory.
 ArtImage loadArtwork(const std::filesystem::path& audioFile);
+// loadArtwork reduced so its longest edge is at most `maxEdge`, for the
+// album grid, which holds hundreds of covers at once.
+ArtImage loadArtworkThumbnail(const std::filesystem::path& audioFile, int maxEdge);
 // Baseline JPEG, at most 600 pixels on its longest edge, for portable players.
 std::vector<unsigned char> playerArtwork(const std::filesystem::path& audioFile);
 // No art is a successful no-op. A failure to save available art fails import.

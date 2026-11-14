@@ -448,15 +448,22 @@ void App::drawToolbar() {
     // control drops out when there is no longer room for it, widest last.
     float rightX = w - 16.0f;
 
-    // Only one way of showing a track list exists, so there is no segmented
-    // view switcher: three of its four cells would be decoration. It comes
-    // back when Album List, Grid and Cover Flow do.
     const bool anythingToSearch = library_ || !host_.tracks().empty();
     const bool showSearch = anythingToSearch && rightX - kSearchWidth > 320.0f;
     float searchX = 0.0f;
     if (showSearch) {
         rightX -= kSearchWidth;
         searchX = rightX;
+    }
+
+    // List | Grid, left of the search field where iTunes kept its view
+    // switcher — but only while it clears the LCD.
+    constexpr float kLayoutSwitchWidth = 60.0f;
+    const float lcdRight = lcdW > 80.0f ? (w + lcdW) * 0.5f : kToolbarLeftEnd;
+    if (anythingToSearch &&
+        rightX - 14.0f - kLayoutSwitchWidth > lcdRight + 14.0f) {
+        rightX -= 14.0f + kLayoutSwitchWidth;
+        drawLayoutSwitch(rightX);
     }
 
     if (showSearch) {
@@ -775,7 +782,10 @@ void App::drawMainPanel(float height) {
         // is drawn, not between them.
         if (visibleDirty_) rebuildVisible();
         if (browserApplies()) drawColumnBrowser(width);
-        drawTrackTable();
+        if (gridShown())
+            drawAlbumGrid();
+        else
+            drawTrackTable();
     } else {
         drawDeviceView(*dev);
     }
@@ -1618,7 +1628,9 @@ void App::drawStatusBar() {
     const Library* shown = shownLibrary();
     const bool onTracks = shown && showingTracks();
     if (onTracks) {
-        text = std::to_string(visible_.size()) + " songs, " +
+        text = (gridShown() ? plural(int(grid_.albums.size()), "album", "albums") + ", "
+                            : std::string()) +
+               std::to_string(visible_.size()) + " songs, " +
                formatTotalDuration(visibleTotalMs_) + ", " +
                formatBytes(visibleTotalBytes_);
         // A multi-selection is worth stating: it is what the context menu and

@@ -35,6 +35,17 @@ struct GLFWwindow;
 
 namespace podbox {
 
+// One album in the grid. `begin`/`end` are a run of App::visible_ rows.
+struct AlbumTile {
+    std::string key;
+    std::string album;
+    std::string artist;
+    std::uint32_t year = 0;
+    std::uint64_t totalMs = 0;
+    int begin = 0, end = 0;
+    std::filesystem::path coverFile;  // the track the cover is read from
+};
+
 class App : private DeviceSession {
 public:
     explicit App(const Fonts& fonts)
@@ -247,6 +258,18 @@ private:
     void drawMainPanel(float height);
     void drawDeviceView(const DeviceInfo& dev);
     void drawTrackTable();
+    // The album grid: the same visible_ rows as the table, grouped into
+    // albums with their covers, iTunes' Grid view.
+    bool gridShown() const { return layout_ == Layout::Grid && showingTracks(); }
+    void groupVisibleIntoAlbums();
+    void drawAlbumGrid();
+    void drawAlbumTracks(const AlbumTile& album, ImVec2 origin, float width);
+    // Starts cover decodes for the tiles drawn this frame, uploads finished
+    // ones, and drops textures nobody has looked at in a while.
+    void updateGridCovers();
+    unsigned int gridCoverTexture(const std::filesystem::path& file,
+                                  bool* loaded);
+    void drawLayoutSwitch(float x);
     void handleTrackTableKeys();
     void drawCapacityBar(const DeviceInfo& dev);
     void drawStatusBar();
@@ -318,6 +341,29 @@ private:
         void clearSelection() { genre.reset(); artist.reset(); album.reset(); }
     };
     ColumnBrowser browser_;
+
+    // List or Grid, chosen by the segmented switch beside the search field.
+    enum class Layout { List, Grid };
+    Layout layout_ = Layout::List;
+    struct AlbumGrid {
+        // Built by rebuildVisible from visible_, which in Grid layout is
+        // ordered album by album so each album is one contiguous run of rows
+        // — and so playback runs through an album, then on to the next.
+        std::vector<AlbumTile> albums;
+        std::string openKey;  // the album opened below its row, if any
+        float scrollToOpen = -1.0f;
+        struct Cover {
+            unsigned int texture = 0;
+            bool loaded = false;
+            double lastUsed = 0;
+        };
+        // Keyed by the audio file the cover is read from.
+        std::unordered_map<std::string, Cover> covers;
+        std::vector<std::filesystem::path> wanted;  // seen this frame, not loaded
+        std::vector<std::string> jobKeys;
+        BackgroundJob<std::vector<ArtImage>> job;
+    };
+    AlbumGrid grid_;
 
     SyncEngine sync_;
     ImportFormat importFormat_ = ImportFormat::Original;

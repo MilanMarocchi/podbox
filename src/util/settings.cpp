@@ -93,6 +93,8 @@ Settings parseSettings(const std::string& text) {
             s.artworkPaneOpen = b;
         } else if (key == "browser_visible" && parseBool(value, &b)) {
             s.browserVisible = b;
+        } else if (key == "grid_layout" && parseBool(value, &b)) {
+            s.gridLayout = b;
         } else if (key == "browser_height" && parseFloat(value, &f)) {
             s.browserHeight = std::clamp(f, 60.0f, 2000.0f);
         } else if (key == "table") {
@@ -120,6 +122,7 @@ std::string formatSettings(const Settings& s) {
         << "skip_duplicates=" << s.skipDuplicates << '\n'
         << "artwork_pane=" << s.artworkPaneOpen << '\n'
         << "browser_visible=" << s.browserVisible << '\n'
+        << "grid_layout=" << s.gridLayout << '\n'
         << "browser_height=" << formatFloat(s.browserHeight) << '\n';
     std::istringstream table(s.tableLayout);
     std::string line;

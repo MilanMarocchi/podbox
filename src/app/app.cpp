@@ -69,7 +69,7 @@ bool App::prepareToClose() {
     // particular, never join a transcode or diskutil process here.
     if (deviceJob_.busy() || sync_.busy() || scan_.running || apple_.busy ||
         recovery_.running || dupes_.verify.running() || dropJob_.busy() ||
-        artJob_.busy() || monitorJob_.busy() || hostSaveJob_.busy() ||
+        artJob_.busy() || grid_.job.busy() || monitorJob_.busy() || hostSaveJob_.busy() ||
         folderJob_.busy() || tagJob_.busy() || syncPlanJob_.busy() ||
         duplicateJob_.busy() || hostRemovalJob_.busy() || hostSavePending_ || !pendingHostTags_.empty() ||
         fingerprintSaveJob_.busy() || fingerprintSavePending_ || folderCheckJob_.busy() || encoderJob_.busy() || watcher_.busy()) return false;
@@ -228,6 +228,7 @@ void App::frame() {
     updateLibrary();
     finishPendingDeviceCopy();
     updateArtwork();
+    updateGridCovers();
     updatePlayback();
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -325,7 +326,7 @@ void App::startEject(const fs::path& mount,
         recovery_.running || dupes_.verify.running() || fingerprintSaveJob_.busy() ||
         fingerprintSavePending_) {
         setStatus("Wait for player operations to finish before ejecting");
-    } else if (monitorJob_.busy() || artJob_.busy() || dropJob_.busy() ||
+    } else if (monitorJob_.busy() || artJob_.busy() || grid_.job.busy() || dropJob_.busy() ||
                syncPlanJob_.busy() || watcher_.busy()) {
         ejectRequestedMount_ = mount;
         setStatus("Finishing player reads before ejecting…");
@@ -779,6 +780,7 @@ void App::restoreSettings(const Settings& s) {
     skipDuplicates_ = s.skipDuplicates;
     artworkPaneOpen_ = s.artworkPaneOpen;
     browser_.visible = s.browserVisible;
+    layout_ = s.gridLayout ? Layout::Grid : Layout::List;
     browser_.height = s.browserHeight;
     art_.reopenWindow = s.artworkWindowOpen && artworkWindowSupported();
 }
@@ -791,6 +793,7 @@ void App::captureSettings(Settings& s) const {
     s.skipDuplicates = skipDuplicates_;
     s.artworkPaneOpen = artworkPaneOpen_;
     s.browserVisible = browser_.visible;
+    s.gridLayout = layout_ == Layout::Grid;
     s.browserHeight = browser_.height;
     // Still owed a reopen if the app quits before its first frame.
     s.artworkWindowOpen = art_.reopenWindow || artworkWindowOpen();
@@ -1388,6 +1391,11 @@ void App::rebuildVisible() {
     if (sortCol_ != 0)
         std::stable_sort(visible_.begin(), visible_.end(), byField);
     if (!sortAsc_) std::reverse(visible_.begin(), visible_.end());
+
+    if (gridShown())
+        groupVisibleIntoAlbums();
+    else
+        grid_.albums.clear();
 }
 
 }  // namespace podbox
